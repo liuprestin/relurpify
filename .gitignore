@@ -1,0 +1,5 @@
+.gocache
+.gomodcache
+.memory
+testdata
+docs
