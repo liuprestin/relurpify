@@ -1,6 +1,12 @@
 # Relurpify
 
- Relurpify is an extensible Go framework that orchestrates planning agents, reasoning graphs, and IDE-facing tools to accelerate code modifications. It exposes an HTTP API, an editor-friendly LSP wrapper, and a CLI so you can embed the same automation stack in multiple environments.
+ Relurpify is an extensible Go framework that orchestrates planning agents,
+  reasoning graphs, and IDE-facing tools to accelerate code modifications. 
+  It exposes an HTTP API, an editor-friendly LSP wrapper, and a CLI so you can embed 
+  the same automation stack in multiple environments.
+
+Experimental project for learning purposes and for local agenic automation ; whose sole goal 
+is to one day re-write itself.
 
 ---
 
@@ -95,6 +101,33 @@ go run ./cmd/relurpify workflow list
 go run ./cmd/relurpify memory list
 ```
 
+### Autodetect tooling & launch the interactive shell
+
+The new `relurpify setup` command probes your machine for supported language servers, queries the local Ollama endpoint for available models, and writes a shared config to `.relurpify/config.json` inside the workspace. Other entry points (including the shell) reuse that file so you only have to detect once.
+
+```
+# Detect tooling for the current workspace and save .relurpify/config.json
+go run ./cmd/relurpify setup --workspace .
+```
+
+`setup` reports which LSP binaries were found, how many matching files live in the repo, and whether it could reach the configured Ollama endpoint. You can inspect/update the config manually, but the interactive shell is usually more convenient:
+
+```
+# Start the agenic shell with the autodetected environment
+go run ./cmd/relurpify shell --workspace .
+
+# Inside the shell:
+models                    # list Ollama models and the current default
+use codellama             # switch models (persisted back to the config)
+lsps                      # show LSP availability + detected languages
+task Summarize README.md  # run a one-off coding/analysis task
+apply lang=go main.go :: add logging around foo()
+detect                    # re-run detection if you install new tooling
+exit
+```
+
+The shell wires itself up using the recorded LSP servers, workspace root, and Ollama endpoint/model so every task/`apply` run behaves like the dedicated CLI helpers while keeping the context in one session.
+
 ### Generate documentation (HTML site + architecture outline)
 
 ```bash
@@ -171,5 +204,3 @@ The table below lists each built-in tool with an example argument payload. Plug 
 3. **Iterate in your editor** and watch the agent’s interaction history (`framework.Context`) for debugging.
 4. **Capture docs** with `./scripts/gen-docs.sh` when the API surface changes so the static site and `ARCHITECTURE.md` stay fresh.
 5. **Commit results** using the git tools (either through the agent or manually) and push as usual.
-
-With the README now centered on building, running, testing, and practical tool usage, contributors have a single landing page that doubles as a runnable cookbook for every capability exposed by the framework.
