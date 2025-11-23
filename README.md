@@ -121,12 +121,19 @@ models                    # list Ollama models and the current default
 use codellama             # switch models (persisted back to the config)
 lsps                      # show LSP availability + detected languages
 task Summarize README.md  # run a one-off coding/analysis task
+write Build a hello world  # generate a new file or scaffolding
 apply lang=go main.go :: add logging around foo()
 detect                    # re-run detection if you install new tooling
 exit
 ```
 
 The shell wires itself up using the recorded LSP servers, workspace root, and Ollama endpoint/model so every task/`apply` run behaves like the dedicated CLI helpers while keeping the context in one session.
+
+On startup the shell will prompt for a workspace directory (creating it if needed) and ask you to choose which detected Ollama model to use. Behind the scenes a persistent toolchain manager keeps language servers alive across commands, so once a Go/Rust/etc. proxy launches, subsequent tasks reuse the same process instead of incurring startup cost. The active tooling summary is stored inside the agent context so coding workflows know exactly which helpers are available.
+
+The `.relurpify/config.json` file now tracks a `languages` array (autofilled from file extensions it sees). On first launch the shell asks which languages you want active so you can trim/expand the list. If you later run `apply` with a new language (for example by setting `--lang rust`), the shell records it automatically, warms the matching LSP, and persists the change for future sessions.
+
+Tool-calling can also be toggled via the `tool_calling` flag. When it remains disabled, the shell automatically swaps to a manual coder agent that parses JSON edit plans from the model and writes files itself—so models without function calling still create real files. You can edit the config manually or rerun the shell to change the setting.
 
 ### Generate documentation (HTML site + architecture outline)
 

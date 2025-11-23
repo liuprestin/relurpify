@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 
 	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
 	"github.com/lexcodex/relurpify/cmd/internal/setup"
+	"github.com/lexcodex/relurpify/cmd/internal/toolchain"
 	"github.com/lexcodex/relurpify/framework"
 	"github.com/lexcodex/relurpify/llm"
 	"github.com/lexcodex/relurpify/persistence"
@@ -438,6 +441,11 @@ func printSetupSummary(cmd *cobra.Command, path string, cfg *setup.Config) {
 
 func describeConfig(cmd *cobra.Command, cfg *setup.Config) {
 	cmd.Printf("Workspace: %s\n", cfg.Workspace)
+	if len(cfg.Languages) > 0 {
+		cmd.Printf("Workspace languages: %s\n", strings.Join(cfg.Languages, ", "))
+	} else {
+		cmd.Println("Workspace languages: (not set)")
+	}
 	cmd.Printf("Ollama endpoint: %s (reachable=%v)\n", cfg.Ollama.Endpoint, cfg.Ollama.Reachable)
 	if cfg.Ollama.CommandPath != "" {
 		cmd.Printf("Ollama binary: %s\n", cfg.Ollama.CommandPath)
@@ -474,11 +482,31 @@ func newShellCmd() *cobra.Command {
 		Use:   "shell",
 		Short: "Interactive agent shell with autodetected tooling",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := ensureShellConfig(configPath, forceDetect)
+			reader := bufio.NewReader(cmd.InOrStdin())
+			if err := promptForWorkspace(cmd, reader); err != nil {
+				return err
+			}
+			if cfgFlag := cmd.Flags().Lookup("config"); cfgFlag == nil || !cfgFlag.Changed {
+				configPath = setup.DefaultConfigPath(flagWorkspace)
+			}
+			cfg, created, err := ensureShellConfig(configPath, forceDetect)
 			if err != nil {
 				return err
 			}
-			return runShell(cmd, configPath, cfg)
+			if created || len(cfg.Languages) == 0 {
+				if err := promptForLanguageSelection(cmd, reader, cfg, configPath); err != nil {
+					return err
+				}
+			}
+			if cfg.ToolCalling == nil {
+				if err := promptForToolCalling(cmd, reader, cfg, configPath); err != nil {
+					return err
+				}
+			}
+			if err := promptForModelSelection(cmd, reader, cfg, configPath); err != nil {
+				return err
+			}
+			return runShell(cmd, reader, configPath, cfg)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", setup.DefaultConfigPath(flagWorkspace), "Config file to load/save")
@@ -486,36 +514,56 @@ func newShellCmd() *cobra.Command {
 	return cmd
 }
 
-func ensureShellConfig(path string, force bool) (*setup.Config, error) {
+func ensureShellConfig(path string, force bool) (*setup.Config, bool, error) {
 	prev, err := loadSetupConfig(path)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if prev == nil || force {
 		cfg, err := setup.Detect(flagWorkspace, flagEndpoint, flagModel, prev)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if err := setup.SaveConfig(path, cfg); err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return cfg, nil
+		return cfg, true, nil
 	}
-	return prev, nil
+	return prev, false, nil
 }
 
-func runShell(cmd *cobra.Command, configPath string, cfg *setup.Config) error {
+func runShell(cmd *cobra.Command, reader *bufio.Reader, configPath string, cfg *setup.Config) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Type 'help' for a command list. Current environment:")
 	describeConfig(cmd, cfg)
-	scanner := bufio.NewScanner(cmd.InOrStdin())
-	scanner.Buffer(make([]byte, 0, 1024), 1024*1024)
+	var (
+		tc  *toolchain.Manager
+		err error
+	)
+	rebuildToolchain := func() error {
+		if tc != nil {
+			tc.Close()
+		}
+		tc, err = toolchain.NewManager(workspaceFromConfig(cfg), cfg.LSPServers)
+		return err
+	}
+	if err := rebuildToolchain(); err != nil {
+		return err
+	}
+	if err := tc.WarmLanguages(cfg.Languages); err != nil {
+		cmd.Printf("Toolchain warm warning: %v\n", err)
+	}
+	defer tc.Close()
 	for {
 		fmt.Fprint(out, "relurpify> ")
-		if !scanner.Scan() {
-			break
+		line, err := readLine(reader)
+		if errors.Is(err, io.EOF) {
+			return nil
 		}
-		line := strings.TrimSpace(scanner.Text())
+		if err != nil {
+			return err
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -546,10 +594,15 @@ func runShell(cmd *cobra.Command, configPath string, cfg *setup.Config) error {
 		case "lsps":
 			listLSPServers(cmd, cfg)
 		case "detect":
-			var err error
 			cfg, err = refreshShellConfig(configPath, cfg)
 			if err != nil {
 				return err
+			}
+			if err := rebuildToolchain(); err != nil {
+				return err
+			}
+			if err := tc.WarmLanguages(cfg.Languages); err != nil {
+				cmd.Printf("Toolchain warm warning: %v\n", err)
 			}
 			describeConfig(cmd, cfg)
 		case "task":
@@ -557,16 +610,24 @@ func runShell(cmd *cobra.Command, configPath string, cfg *setup.Config) error {
 				cmd.Println("usage: task <instruction>")
 				continue
 			}
-			if err := shellRunTask(cmd, cfg, framework.TaskTypeCodeModification, rest); err != nil {
-				cmd.Printf("task error: %v\n", err)
+			if err := shellRunTask(cmd, cfg, tc, configPath, framework.TaskTypeCodeModification, rest); err != nil {
+				reportShellError(cmd, "task", err)
+			}
+		case "write":
+			if rest == "" {
+				cmd.Println("usage: write <instruction>")
+				continue
+			}
+			if err := shellRunTask(cmd, cfg, tc, configPath, framework.TaskTypeCodeGeneration, rest); err != nil {
+				reportShellError(cmd, "write", err)
 			}
 		case "analyze":
 			if rest == "" {
 				cmd.Println("usage: analyze <instruction>")
 				continue
 			}
-			if err := shellRunTask(cmd, cfg, framework.TaskTypeAnalysis, rest); err != nil {
-				cmd.Printf("analyze error: %v\n", err)
+			if err := shellRunTask(cmd, cfg, tc, configPath, framework.TaskTypeAnalysis, rest); err != nil {
+				reportShellError(cmd, "analyze", err)
 			}
 		case "apply":
 			file, lang, instr, err := parseApplyArgs(rest)
@@ -574,17 +635,13 @@ func runShell(cmd *cobra.Command, configPath string, cfg *setup.Config) error {
 				cmd.Println(err)
 				continue
 			}
-			if err := shellRunApply(cmd, cfg, file, lang, instr); err != nil {
-				cmd.Printf("apply error: %v\n", err)
+			if err := shellRunApply(cmd, cfg, tc, configPath, file, lang, instr); err != nil {
+				reportShellError(cmd, "apply", err)
 			}
 		default:
 			cmd.Printf("unknown command: %s\n", verb)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return nil
 }
 
 func refreshShellConfig(path string, prev *setup.Config) (*setup.Config, error) {
@@ -619,6 +676,7 @@ func printShellHelp(cmd *cobra.Command) {
 	cmd.Println("  use <model>          Switch the default model")
 	cmd.Println("  lsps                 List LSP availability")
 	cmd.Println("  task <instruction>   Run a coding task via the agent stack")
+	cmd.Println("  write <instruction>  Generate new code/content in the workspace")
 	cmd.Println("  analyze <instruction>Run an analysis-style task")
 	cmd.Println("  apply [lang=<id>] <file> :: <instruction>  Apply changes to a file")
 	cmd.Println("  exit|quit            Leave the shell")
@@ -661,24 +719,30 @@ func listLSPServers(cmd *cobra.Command, cfg *setup.Config) {
 	}
 }
 
-func shellRunTask(cmd *cobra.Command, cfg *setup.Config, taskType framework.TaskType, instruction string) error {
+func shellRunTask(cmd *cobra.Command, cfg *setup.Config, tc *toolchain.Manager, configPath string, taskType framework.TaskType, instruction string) error {
 	workspace := workspaceFromConfig(cfg)
 	agentCfg := buildFrameworkConfig(cfg)
 	memory, err := framework.NewHybridMemory(filepath.Join(workspace, ".memory"))
 	if err != nil {
 		return err
 	}
-	registry := cliutils.BuildToolRegistry(workspace)
+	registry, err := tc.BuildRegistry()
+	if err != nil {
+		return err
+	}
 	modelClient := llm.NewClient(agentCfg.OllamaEndpoint, agentCfg.Model)
 	agent := server.AgentFactory(modelClient, registry, memory, agentCfg)
 	task := &framework.Task{
 		ID:          fmt.Sprintf("shell-%d", time.Now().UnixNano()),
 		Type:        taskType,
 		Instruction: instruction,
-		Context:     map[string]any{},
+		Context:     map[string]any{"workspace": workspace},
 	}
 	state := framework.NewContext()
 	state.Set("task.id", task.ID)
+	state.Set("workspace.root", workspace)
+	state.Set("toolchain.active_languages", tc.ActiveLanguages())
+	state.Set("toolchain.describe", tc.Describe())
 	result, err := agent.Execute(context.Background(), task, state)
 	if err != nil {
 		return err
@@ -686,7 +750,7 @@ func shellRunTask(cmd *cobra.Command, cfg *setup.Config, taskType framework.Task
 	return renderShellResult(cmd, state, result)
 }
 
-func shellRunApply(cmd *cobra.Command, cfg *setup.Config, filePath, language, instruction string) error {
+func shellRunApply(cmd *cobra.Command, cfg *setup.Config, tc *toolchain.Manager, configPath, filePath, language, instruction string) error {
 	workspace := workspaceFromConfig(cfg)
 	absFile := filePath
 	if !filepath.IsAbs(absFile) {
@@ -701,32 +765,32 @@ func shellRunApply(cmd *cobra.Command, cfg *setup.Config, filePath, language, in
 	if err != nil {
 		return err
 	}
-	registry := cliutils.BuildToolRegistry(workspace)
 	langKey := language
 	if langKey == "" {
 		langKey = cliutils.InferLanguageByExtension(absFile)
 	}
 	langKey = canonicalLangKey(langKey)
-	var cleanup func()
-	if langKey != "" && shouldUseLSP(cfg, langKey) {
-		proxy, closer, err := cliutils.NewProxyForLanguage(langKey, workspace)
-		if err != nil {
+	if langKey != "" {
+		if err := ensureLanguageTracked(cmd, cfg, configPath, langKey); err != nil {
+			cmd.Printf("language registration warning: %v\n", err)
+		} else if err := tc.WarmLanguages([]string{langKey}); err != nil {
+			cmd.Printf("Toolchain warm warning: %v\n", err)
+		}
+		if err := tc.EnsureLanguage(langKey); err != nil {
 			return err
 		}
-		if proxy != nil {
-			cliutils.RegisterLSPTools(registry, proxy)
-			cleanup = closer
-		}
 	}
-	if cleanup != nil {
-		defer cleanup()
+	registry, err := tc.BuildRegistry(langKey)
+	if err != nil {
+		return err
 	}
 	modelClient := llm.NewClient(agentCfg.OllamaEndpoint, agentCfg.Model)
 	agent := server.AgentFactory(modelClient, registry, memory, agentCfg)
 	ctxMap := map[string]any{
-		"file":  absFile,
-		"files": []string{absFile},
-		"code":  string(data),
+		"file":      absFile,
+		"files":     []string{absFile},
+		"code":      string(data),
+		"workspace": workspace,
 	}
 	if langKey != "" {
 		ctxMap["language"] = langKey
@@ -741,23 +805,14 @@ func shellRunApply(cmd *cobra.Command, cfg *setup.Config, filePath, language, in
 	state.Set("task.id", task.ID)
 	state.Set("active.file", absFile)
 	state.Set("active.uri", absFile)
+	state.Set("workspace.root", workspace)
+	state.Set("toolchain.active_languages", tc.ActiveLanguages())
+	state.Set("toolchain.describe", tc.Describe())
 	result, err := agent.Execute(context.Background(), task, state)
 	if err != nil {
 		return err
 	}
 	return renderShellResult(cmd, state, result)
-}
-
-func shouldUseLSP(cfg *setup.Config, lang string) bool {
-	if cfg == nil {
-		return true
-	}
-	for _, server := range cfg.LSPServers {
-		if server.Language == lang || server.ID == lang {
-			return server.Available
-		}
-	}
-	return true
 }
 
 func canonicalLangKey(lang string) string {
@@ -792,7 +847,13 @@ func renderShellResult(cmd *cobra.Command, state *framework.Context, result *fra
 
 func workspaceFromConfig(cfg *setup.Config) string {
 	if cfg != nil && cfg.Workspace != "" {
+		if abs, err := filepath.Abs(cfg.Workspace); err == nil {
+			return abs
+		}
 		return cfg.Workspace
+	}
+	if abs, err := filepath.Abs(flagWorkspace); err == nil {
+		return abs
 	}
 	return flagWorkspace
 }
@@ -808,13 +869,260 @@ func buildFrameworkConfig(cfg *setup.Config) *framework.Config {
 	if cfg != nil && cfg.Ollama.Endpoint != "" {
 		endpoint = cfg.Ollama.Endpoint
 	}
+	disableTools := flagDisableTools
+	if !disableTools && cfg != nil && cfg.ToolCalling != nil {
+		disableTools = !*cfg.ToolCalling
+	}
 	return &framework.Config{
 		Model:              model,
 		OllamaEndpoint:     endpoint,
 		DefaultAgent:       "coding",
 		MaxIterations:      8,
-		DisableToolCalling: flagDisableTools,
+		DisableToolCalling: disableTools,
 	}
+}
+
+func promptForLanguageSelection(cmd *cobra.Command, reader *bufio.Reader, cfg *setup.Config, configPath string) error {
+	suggested := normalizeLanguageList(cfg.Languages)
+	if len(suggested) == 0 {
+		for _, server := range cfg.LSPServers {
+			if server.WorkspaceMatches > 0 {
+				suggested = append(suggested, server.ID)
+			}
+		}
+		suggested = normalizeLanguageList(suggested)
+	}
+	if len(suggested) > 0 {
+		cmd.Printf("Detected languages: %s\n", strings.Join(suggested, ", "))
+	} else {
+		cmd.Println("No languages detected automatically.")
+	}
+	cmd.Printf("Enter comma-separated language IDs to enable (blank to accept the detected list).\n")
+	cmd.Printf("Supported language keys include: %s\n", strings.Join(cliutils.SupportedLSPKeys(), ", "))
+	cmd.Print("Languages: ")
+	line, err := readLine(reader)
+	if err != nil {
+		return err
+	}
+	line = strings.TrimSpace(line)
+	if line != "" {
+		langs := parseLanguageInput(cmd, line)
+		if len(langs) == 0 {
+			cmd.Println("No valid languages provided; keeping detected list.")
+		} else {
+			cfg.Languages = langs
+			cfg.LastUpdated = time.Now()
+			return setup.SaveConfig(configPath, cfg)
+		}
+	}
+	if len(cfg.Languages) == 0 && len(suggested) > 0 {
+		cfg.Languages = suggested
+		cfg.LastUpdated = time.Now()
+		return setup.SaveConfig(configPath, cfg)
+	}
+	return nil
+}
+
+func parseLanguageInput(cmd *cobra.Command, raw string) []string {
+	parts := strings.Split(raw, ",")
+	langs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, ok := cliutils.LookupLSPDescriptor(part); !ok {
+			cmd.Printf("Warning: language %s is not recognized; it will be tracked without LSP support.\n", part)
+		}
+		langs = append(langs, canonicalLangKey(part))
+	}
+	return normalizeLanguageList(langs)
+}
+
+func ensureLanguageTracked(cmd *cobra.Command, cfg *setup.Config, configPath, lang string) error {
+	if cfg == nil || lang == "" {
+		return nil
+	}
+	lang = canonicalLangKey(lang)
+	if lang == "" {
+		return nil
+	}
+	for _, existing := range cfg.Languages {
+		if existing == lang {
+			return nil
+		}
+	}
+	cfg.Languages = append(cfg.Languages, lang)
+	cfg.Languages = normalizeLanguageList(cfg.Languages)
+	cfg.LastUpdated = time.Now()
+	if err := setup.SaveConfig(configPath, cfg); err != nil {
+		return err
+	}
+	cmd.Printf("Added language %s to workspace config.\n", lang)
+	return nil
+}
+
+func normalizeLanguageList(langs []string) []string {
+	if len(langs) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(langs))
+	for _, lang := range langs {
+		lang = canonicalLangKey(lang)
+		if lang == "" {
+			continue
+		}
+		if _, ok := seen[lang]; ok {
+			continue
+		}
+		seen[lang] = struct{}{}
+		result = append(result, lang)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func promptForWorkspace(cmd *cobra.Command, reader *bufio.Reader) error {
+	flagEntry := cmd.InheritedFlags().Lookup("workspace")
+	explicit := flagEntry != nil && flagEntry.Changed && flagWorkspace != ""
+	if explicit {
+		abs, err := ensureWorkspaceExists(cmd, reader, flagWorkspace, false)
+		if err != nil {
+			return err
+		}
+		flagWorkspace = abs
+		return nil
+	}
+	current := flagWorkspace
+	if current == "" {
+		current = "."
+	}
+	for {
+		cmd.Printf("Workspace directory [%s]: ", current)
+		input, err := readLine(reader)
+		if err != nil {
+			return err
+		}
+		input = strings.TrimSpace(input)
+		if input == "" {
+			input = current
+		}
+		if input == "" {
+			cmd.Println("Workspace is required.")
+			continue
+		}
+		abs, err := ensureWorkspaceExists(cmd, reader, input, true)
+		if err != nil {
+			cmd.Printf("workspace error: %v\n", err)
+			continue
+		}
+		flagWorkspace = abs
+		return nil
+	}
+}
+
+func ensureWorkspaceExists(cmd *cobra.Command, reader *bufio.Reader, path string, interactive bool) (string, error) {
+	if path == "" {
+		return "", errors.New("workspace path is empty")
+	}
+	resolved, err := filepath.Abs(path)
+	if err == nil {
+		path = resolved
+	}
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", path)
+		}
+		return path, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if !interactive {
+		return "", fmt.Errorf("workspace %s does not exist", path)
+	}
+	cmd.Printf("Workspace %s does not exist. Create it? [y/N]: ", path)
+	answer, readErr := readLine(reader)
+	if readErr != nil {
+		return "", readErr
+	}
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "y" && answer != "yes" {
+		return "", fmt.Errorf("workspace %s not created", path)
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func promptForModelSelection(cmd *cobra.Command, reader *bufio.Reader, cfg *setup.Config, configPath string) error {
+	if cfg == nil {
+		return nil
+	}
+	if !cfg.Ollama.Reachable || len(cfg.Ollama.AvailableModels) == 0 {
+		return nil
+	}
+	current := cfg.Ollama.SelectedModel
+	cmd.Println("Detected Ollama models:")
+	for _, model := range cfg.Ollama.AvailableModels {
+		marker := " "
+		if model == current {
+			marker = "*"
+		}
+		cmd.Printf("%s %s\n", marker, model)
+	}
+	cmd.Printf("Select model [%s]: ", current)
+	choice, err := readLine(reader)
+	if err != nil {
+		return err
+	}
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		choice = current
+	}
+	if choice == "" {
+		return errors.New("model selection required to start the shell")
+	}
+	if !cfg.SetSelectedModel(choice) {
+		return fmt.Errorf("model %s not detected by Ollama", choice)
+	}
+	cfg.LastUpdated = time.Now()
+	return setup.SaveConfig(configPath, cfg)
+}
+
+func promptForToolCalling(cmd *cobra.Command, reader *bufio.Reader, cfg *setup.Config, configPath string) error {
+	if cfg == nil {
+		return nil
+	}
+	if cfg.ToolCalling != nil {
+		return nil
+	}
+	cmd.Println("Enable LLM tool-calling (requires models with function-call support).")
+	cmd.Print("Allow tool-calling? [y/N]: ")
+	answer, err := readLine(reader)
+	if err != nil {
+		return err
+	}
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	enabled := answer == "y" || answer == "yes"
+	cfg.ToolCalling = new(bool)
+	*cfg.ToolCalling = enabled
+	cfg.LastUpdated = time.Now()
+	return setup.SaveConfig(configPath, cfg)
+}
+
+func readLine(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) && line != "" {
+			return strings.TrimRight(line, "\r\n"), nil
+		}
+		return strings.TrimRight(line, "\r\n"), err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
 }
 
 func parseApplyArgs(input string) (string, string, string, error) {
@@ -850,4 +1158,38 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func reportShellError(cmd *cobra.Command, prefix string, err error) {
+	if err == nil {
+		return
+	}
+	cmd.Printf("%s error: %s\n", prefix, detailedError(err))
+}
+
+func detailedError(err error) string {
+	if err == nil {
+		return ""
+	}
+	parts := []string{}
+	seen := map[error]bool{}
+	for err != nil {
+		if seen[err] {
+			break
+		}
+		seen[err] = true
+		parts = append(parts, err.Error())
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			break
+		}
+		err = unwrapper.Unwrap()
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts, " | caused by: ")
 }

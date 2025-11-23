@@ -18,6 +18,8 @@ import (
 // Config captures the auto-detected environment so other tools can share it.
 type Config struct {
 	Workspace   string       `json:"workspace"`
+	Languages   []string     `json:"languages,omitempty"`
+	ToolCalling *bool        `json:"tool_calling,omitempty"`
 	LastUpdated time.Time    `json:"last_updated"`
 	Ollama      OllamaConfig `json:"ollama"`
 	LSPServers  []LSPServer  `json:"lsp_servers"`
@@ -87,8 +89,15 @@ func Detect(workspace, endpoint, defaultModel string, prev *Config) (*Config, er
 		return nil, err
 	}
 	ollama := detectOllama(endpoint, defaultModel, prev)
+	var toolCalling *bool
+	if prev != nil && prev.ToolCalling != nil {
+		val := *prev.ToolCalling
+		toolCalling = &val
+	}
 	cfg := &Config{
 		Workspace:   workspace,
+		Languages:   selectWorkspaceLanguages(prev, lspServers),
+		ToolCalling: toolCalling,
 		LastUpdated: time.Now(),
 		Ollama:      ollama,
 		LSPServers:  lspServers,
@@ -302,4 +311,38 @@ func scanExtensions(workspace string) (map[string]int, error) {
 		return nil, err
 	}
 	return counts, nil
+}
+
+func selectWorkspaceLanguages(prev *Config, servers []LSPServer) []string {
+	if prev != nil && len(prev.Languages) > 0 {
+		return normalizeLanguages(prev.Languages)
+	}
+	var langs []string
+	for _, srv := range servers {
+		if srv.WorkspaceMatches > 0 {
+			langs = append(langs, srv.ID)
+		}
+	}
+	return normalizeLanguages(langs)
+}
+
+func normalizeLanguages(langs []string) []string {
+	if len(langs) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	res := make([]string, 0, len(langs))
+	for _, lang := range langs {
+		lang = strings.ToLower(strings.TrimSpace(lang))
+		if lang == "" {
+			continue
+		}
+		if _, ok := seen[lang]; ok {
+			continue
+		}
+		seen[lang] = struct{}{}
+		res = append(res, lang)
+	}
+	sort.Strings(res)
+	return res
 }
