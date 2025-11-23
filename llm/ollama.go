@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/lexcodex/relurpify/framework"
@@ -197,6 +198,11 @@ func (c *Client) doRequest(ctx context.Context, path string, payload interface{}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		detail := strings.TrimSpace(string(msg))
+		if detail != "" {
+			return nil, fmt.Errorf("ollama error: %s: %s", resp.Status, detail)
+		}
 		return nil, fmt.Errorf("ollama error: %s", resp.Status)
 	}
 	return decodeLLMResponse(resp.Body)
