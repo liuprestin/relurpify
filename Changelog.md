@@ -1,3 +1,18 @@
+# 0.7
+
+Language-Aware Analysis
+
+Added an exported CodingAnalysis struct plus language/file-aware prompting so the analyze node now gathers file hints from the task/state, selects a language, and parses the LLM output into structured plan/files/risks data that get stored in the shared context for later consumers (agents/coder.go (line 22), agents/coder.go (line 104), agents/coder.go (line 144)).
+Introduced helpers to collect file paths from task/context, infer languages from extensions, and normalize the JSON payload so even mixed string/object lists are converted into deterministic string slices (agents/coder.go (line 210), agents/coder.go (line 248), agents/coder.go (line 276)).
+The CLI entry points now feed both the detected language and explicit file lists into the task context, ensuring the coding agent always has the necessary metadata even when run outside the LSP (cmd/coder/main.go (line 114), cmd/relurpify/main.go (line 726)).
+LSP-originated requests also pass their document language and URI as part of the task context, keeping editor flows in sync with the new analysis expectations (server/lsp_server.go (line 131), server/lsp_server.go (line 182)).
+
+# 0.6
+
+- documentation pass
+- interactive coder-cli
+- setup automation
+
 # 0.5
 
 What’s New
@@ -8,6 +23,12 @@ Extended the LSP client wrappers with a Close() method so CLIs (and future tooli
 Updated README.md with the expanded CLI tooling instructions, including examples for the relurpify CLI and the new cursor-style relurpify-coder apply command.
 relurpify-coder’s apply subcommand reads a target file, auto-detects/optionally overrides the language, registers the appropriate LSP client + tools, and runs the coding agent stack to apply the instruction—mirroring a cursor-cli workflow.
 The relurpify CLI now leverages the shared cliutils package for registry/LSP handling, keeping the framework utilities and coding utilities decoupled.
+
+Environment Autodetect & Shell
+
+Introduced cmd/internal/setup along with a new `relurpify setup` command that probes for supported LSP binaries, checks the local Ollama endpoint/models, and writes a reusable `.relurpify/config.json` for the rest of the tooling.
+Extended the LSP descriptor metadata with command hints so the detector can report which servers are installed and which languages exist in the workspace.
+Added `relurpify shell`, an interactive agenic console that loads the shared config, lets you re-run detection, list/switch Ollama models, inspect LSP availability, and launch coding/analysis/apply flows without leaving the REPL.
 
 
 # 0.4
