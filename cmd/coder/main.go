@@ -112,8 +112,12 @@ func newApplyCmd() *cobra.Command {
 			agent := server.AgentFactory(modelClient, registry, memory, cfg)
 
 			ctxMap := map[string]any{
-				"file": absFile,
-				"code": string(data),
+				"file":  absFile,
+				"files": []string{absFile},
+				"code":  string(data),
+			}
+			if langKey != "" {
+				ctxMap["language"] = langKey
 			}
 			task := &framework.Task{
 				ID:          fmt.Sprintf("code-%d", time.Now().UnixNano()),
