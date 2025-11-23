@@ -46,26 +46,40 @@ func RegisterLSPTools(registry *framework.ToolRegistry, proxy *tools.Proxy) {
 
 // LSPDescriptor captures metadata needed to start and register an LSP client.
 type LSPDescriptor struct {
+	ID         string
 	Factory    func(root string) (tools.LSPClient, error)
 	Extensions []string
+	Commands   []string
 }
 
-var lspDescriptorMap = map[string]LSPDescriptor{}
+var (
+	lspDescriptorMap       = map[string]LSPDescriptor{}
+	canonicalDescriptorMap = map[string]LSPDescriptor{}
+)
 
 func init() {
-	addDescriptor([]string{"go", "gopls"}, LSPDescriptor{Factory: tools.NewGoplsClient, Extensions: []string{"go"}})
-	addDescriptor([]string{"rust", "rs", "rust-analyzer"}, LSPDescriptor{Factory: tools.NewRustAnalyzerClient, Extensions: []string{"rs"}})
-	addDescriptor([]string{"clang", "clangd", "c", "cpp", "cc"}, LSPDescriptor{Factory: tools.NewClangdClient, Extensions: []string{"c", "h", "cpp", "hpp", "cc", "cxx"}})
-	addDescriptor([]string{"haskell", "hls"}, LSPDescriptor{Factory: tools.NewHaskellClient, Extensions: []string{"hs"}})
-	addDescriptor([]string{"ts", "typescript"}, LSPDescriptor{Factory: tools.NewTypeScriptClient, Extensions: []string{"ts", "tsx"}})
-	addDescriptor([]string{"js", "javascript"}, LSPDescriptor{Factory: tools.NewTypeScriptClient, Extensions: []string{"js", "jsx"}})
-	addDescriptor([]string{"lua"}, LSPDescriptor{Factory: tools.NewLuaClient, Extensions: []string{"lua"}})
-	addDescriptor([]string{"python", "py", "pylsp"}, LSPDescriptor{Factory: tools.NewPythonLSPClient, Extensions: []string{"py"}})
+	addDescriptor([]string{"go", "gopls"}, LSPDescriptor{ID: "go", Factory: tools.NewGoplsClient, Extensions: []string{"go"}, Commands: []string{"gopls"}})
+	addDescriptor([]string{"rust", "rs", "rust-analyzer"}, LSPDescriptor{ID: "rust", Factory: tools.NewRustAnalyzerClient, Extensions: []string{"rs"}, Commands: []string{"rust-analyzer"}})
+	addDescriptor([]string{"clang", "clangd", "c", "cpp", "cc"}, LSPDescriptor{ID: "clangd", Factory: tools.NewClangdClient, Extensions: []string{"c", "h", "cpp", "hpp", "cc", "cxx"}, Commands: []string{"clangd"}})
+	addDescriptor([]string{"haskell", "hls"}, LSPDescriptor{ID: "haskell", Factory: tools.NewHaskellClient, Extensions: []string{"hs"}, Commands: []string{"haskell-language-server-wrapper", "haskell-language-server"}})
+	addDescriptor([]string{"ts", "typescript"}, LSPDescriptor{ID: "typescript", Factory: tools.NewTypeScriptClient, Extensions: []string{"ts", "tsx"}, Commands: []string{"typescript-language-server"}})
+	addDescriptor([]string{"js", "javascript"}, LSPDescriptor{ID: "javascript", Factory: tools.NewTypeScriptClient, Extensions: []string{"js", "jsx"}, Commands: []string{"typescript-language-server"}})
+	addDescriptor([]string{"lua"}, LSPDescriptor{ID: "lua", Factory: tools.NewLuaClient, Extensions: []string{"lua"}, Commands: []string{"lua-language-server"}})
+	addDescriptor([]string{"python", "py", "pylsp"}, LSPDescriptor{ID: "python", Factory: tools.NewPythonLSPClient, Extensions: []string{"py"}, Commands: []string{"pylsp"}})
 }
 
 func addDescriptor(keys []string, desc LSPDescriptor) {
+	if len(keys) == 0 {
+		return
+	}
+	if desc.ID == "" {
+		desc.ID = strings.ToLower(keys[0])
+	}
 	for _, key := range keys {
 		lspDescriptorMap[strings.ToLower(key)] = desc
+	}
+	if _, ok := canonicalDescriptorMap[desc.ID]; !ok {
+		canonicalDescriptorMap[desc.ID] = desc
 	}
 }
 
@@ -112,6 +126,15 @@ func NewProxyForLanguage(language, root string) (*tools.Proxy, func(), error) {
 		}
 	}
 	return proxy, cleanup, nil
+}
+
+// CanonicalLSPDescriptors returns a copy of the deduplicated descriptor map keyed by canonical ID.
+func CanonicalLSPDescriptors() map[string]LSPDescriptor {
+	res := make(map[string]LSPDescriptor, len(canonicalDescriptorMap))
+	for k, v := range canonicalDescriptorMap {
+		res[k] = v
+	}
+	return res
 }
 
 // InferLanguageByExtension returns a language key given a file path.
