@@ -1,5 +1,6 @@
 .gocache
 .gomodcache
 .memory
+.relurpify
 testdata
 docs
