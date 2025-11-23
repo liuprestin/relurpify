@@ -112,9 +112,10 @@ func newApplyCmd() *cobra.Command {
 			agent := server.AgentFactory(modelClient, registry, memory, cfg)
 
 			ctxMap := map[string]any{
-				"file":  absFile,
-				"files": []string{absFile},
-				"code":  string(data),
+				"file":      absFile,
+				"files":     []string{absFile},
+				"code":      string(data),
+				"workspace": coderWorkspace,
 			}
 			if langKey != "" {
 				ctxMap["language"] = langKey
@@ -129,6 +130,7 @@ func newApplyCmd() *cobra.Command {
 			state.Set("task.id", task.ID)
 			state.Set("active.file", absFile)
 			state.Set("active.uri", absFile)
+			state.Set("workspace.root", coderWorkspace)
 
 			result, err := agent.Execute(context.Background(), task, state)
 			if err != nil {
