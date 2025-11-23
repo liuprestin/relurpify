@@ -137,15 +137,21 @@ func (s *LSPServer) AIComplete(ctx context.Context, params AICompleteParams) (*A
 	for k, v := range params.Context {
 		state.Set("context."+k, v)
 	}
+	lang := s.documentLanguage(params.URI)
+	ctxMap := map[string]any{
+		"uri":     params.URI,
+		"files":   []string{params.URI},
+		"range":   params.Range,
+		"content": s.documentText(params.URI),
+	}
+	if lang != "" {
+		ctxMap["language"] = lang
+	}
 	task := &framework.Task{
 		ID:          fmt.Sprintf("ai-%d", time.Now().UnixNano()),
 		Type:        framework.TaskTypeCodeModification,
 		Instruction: params.Instruction,
-		Context: map[string]any{
-			"uri":     params.URI,
-			"range":   params.Range,
-			"content": s.documentText(params.URI),
-		},
+		Context:     ctxMap,
 	}
 	result, err := s.Agent.Execute(ctx, task, state)
 	if err != nil {
@@ -178,6 +184,15 @@ func (s *LSPServer) documentText(uri string) string {
 	defer s.mu.RUnlock()
 	if doc, ok := s.openDocuments[uri]; ok {
 		return doc.Text
+	}
+	return ""
+}
+
+func (s *LSPServer) documentLanguage(uri string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if doc, ok := s.openDocuments[uri]; ok {
+		return doc.LanguageID
 	}
 	return ""
 }
