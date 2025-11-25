@@ -133,7 +133,7 @@ On startup the shell will prompt for a workspace directory (creating it if neede
 
 The `.relurpify/config.json` file now tracks a `languages` array (autofilled from file extensions it sees). On first launch the shell asks which languages you want active so you can trim/expand the list. If you later run `apply` with a new language (for example by setting `--lang rust`), the shell records it automatically, warms the matching LSP, and persists the change for future sessions.
 
-Tool-calling can also be toggled via the `tool_calling` flag. When it remains disabled, the shell automatically swaps to a manual coder agent that parses JSON edit plans from the model and writes files itself—so models without function calling still create real files. You can edit the config manually or rerun the shell to change the setting.
+Tool-calling can also be toggled via the `tool_calling` flag. When it remains disabled, the shell automatically swaps to a manual coder agent that parses JSON (or markdown) edit plans from the model and writes files itself—so models without function calling still create real files even if they don’t emit perfect JSON. You can edit the config manually or rerun the shell to change the setting.
 
 ### Generate documentation (HTML site + architecture outline)
 
