@@ -475,6 +475,46 @@ func describeConfig(cmd *cobra.Command, cfg *setup.Config) {
 	}
 }
 
+func printShellWorkspaceSummary(cmd *cobra.Command, cfg *setup.Config) {
+	agentCfg := buildFrameworkConfig(cfg)
+	workspace := workspaceFromConfig(cfg)
+	cmd.Println("Workspace services summary:")
+	cmd.Printf("  Active workspace: %s\n", workspace)
+	cmd.Printf("  Selected model: %s\n", shellModelSummary(cfg, agentCfg))
+	cmd.Printf("  Agents: %s\n", shellAgentSummary(agentCfg))
+	toolCalling := "enabled"
+	if agentCfg != nil && agentCfg.DisableToolCalling {
+		toolCalling = "disabled"
+	}
+	cmd.Printf("  Tool calling: %s\n", toolCalling)
+}
+
+func shellModelSummary(cfg *setup.Config, agentCfg *framework.Config) string {
+	model := "unknown"
+	if agentCfg != nil && agentCfg.Model != "" {
+		model = agentCfg.Model
+	}
+	if cfg == nil || len(cfg.Ollama.AvailableModels) == 0 {
+		return model
+	}
+	return fmt.Sprintf("%s (available: %s)", model, strings.Join(cfg.Ollama.AvailableModels, ", "))
+}
+
+func shellAgentSummary(agentCfg *framework.Config) string {
+	if agentCfg == nil {
+		return "unknown"
+	}
+	stack := []string{"Reflection agent"}
+	role := "Coding agent"
+	if agentCfg.DisableToolCalling {
+		role = "Manual coding agent"
+	} else if agentCfg.DefaultAgent != "" && agentCfg.DefaultAgent != "coding" {
+		role = fmt.Sprintf("%s agent", agentCfg.DefaultAgent)
+	}
+	stack = append(stack, role)
+	return strings.Join(stack, " -> ")
+}
+
 func newShellCmd() *cobra.Command {
 	var configPath string
 	var forceDetect bool
@@ -535,7 +575,7 @@ func ensureShellConfig(path string, force bool) (*setup.Config, bool, error) {
 func runShell(cmd *cobra.Command, reader *bufio.Reader, configPath string, cfg *setup.Config) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintln(out, "Type 'help' for a command list. Current environment:")
-	describeConfig(cmd, cfg)
+	printShellWorkspaceSummary(cmd, cfg)
 	var (
 		tc  *toolchain.Manager
 		err error
@@ -574,7 +614,7 @@ func runShell(cmd *cobra.Command, reader *bufio.Reader, configPath string, cfg *
 		case "exit", "quit":
 			return nil
 		case "status":
-			describeConfig(cmd, cfg)
+			printShellWorkspaceSummary(cmd, cfg)
 		case "models":
 			listModels(cmd, cfg)
 		case "use":
@@ -604,7 +644,7 @@ func runShell(cmd *cobra.Command, reader *bufio.Reader, configPath string, cfg *
 			if err := tc.WarmLanguages(cfg.Languages); err != nil {
 				cmd.Printf("Toolchain warm warning: %v\n", err)
 			}
-			describeConfig(cmd, cfg)
+			printShellWorkspaceSummary(cmd, cfg)
 		case "task":
 			if rest == "" {
 				cmd.Println("usage: task <instruction>")
