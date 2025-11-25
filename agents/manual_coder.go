@@ -125,6 +125,7 @@ type ManualAction struct {
 type ManualActionPlan struct {
 	Actions []ManualAction `json:"actions"`
 	Summary string         `json:"summary"`
+	LogPath string         `json:"log_path,omitempty"`
 }
 
 type manualGenerateNode struct {
@@ -161,9 +162,12 @@ Respond with compact JSON:
 		return nil, err
 	}
 	state.AddInteraction("assistant", resp.Text, map[string]interface{}{"node": n.id})
-	plan, err := parseManualPlan(resp.Text)
+	plan, logPath, err := parseManualPlan(resp.Text)
 	if err != nil {
 		return nil, err
+	}
+	if logPath != "" {
+		state.Set("manual.plan_log", logPath)
 	}
 	state.Set("manual.plan", plan)
 	return &framework.Result{NodeID: n.id, Success: true, Data: map[string]interface{}{"plan": plan}}, nil
@@ -283,31 +287,63 @@ func (n *manualValidateNode) Execute(ctx context.Context, state *framework.Conte
 	return &framework.Result{NodeID: n.id, Success: res.Success, Data: res.Data, Error: toolErr(res.Error)}, nil
 }
 
-func parseManualPlan(raw string) (ManualActionPlan, error) {
+func parseManualPlan(raw string) (ManualActionPlan, string, error) {
 	snippet := stripCodeFence(extractJSONSnippet(raw))
 	if snippet == "" {
-		return ManualActionPlan{}, fmt.Errorf("manual plan missing JSON body")
+		if fallback, logPath, err := parseManualPlanFallback(raw); err == nil {
+			return fallback, logPath, nil
+		}
+		return ManualActionPlan{}, "", fmt.Errorf("manual plan missing JSON body")
 	}
 	safeSnippet := escapeNewlinesInStrings(snippet)
 	var plan ManualActionPlan
 	if err := json.Unmarshal([]byte(safeSnippet), &plan); err != nil {
 		clean := escapeNewlinesInStrings(stripTrailingCommas(safeSnippet))
 		if clean == safeSnippet {
-			return ManualActionPlan{}, err
+			if fallback, logPath, fErr := parseManualPlanFallback(raw); fErr == nil {
+				return fallback, logPath, nil
+			}
+			return ManualActionPlan{}, "", err
 		}
 		if err := json.Unmarshal([]byte(clean), &plan); err != nil {
-			return ManualActionPlan{}, err
+			if fallback, logPath, fErr := parseManualPlanFallback(raw); fErr == nil {
+				return fallback, logPath, nil
+			}
+			return ManualActionPlan{}, "", err
 		}
 	}
 	if len(plan.Actions) == 0 {
-		return ManualActionPlan{}, fmt.Errorf("manual plan has no actions")
+		return ManualActionPlan{}, "", fmt.Errorf("manual plan has no actions")
 	}
 	for i := range plan.Actions {
 		if plan.Actions[i].Mode == "" {
 			plan.Actions[i].Mode = "replace"
 		}
 	}
-	return plan, nil
+	return plan, "", nil
+}
+
+func parseManualPlanFallback(raw string) (ManualActionPlan, string, error) {
+	content := extractPrimaryCodeBlock(raw)
+	if content == "" {
+		content = strings.TrimSpace(raw)
+	}
+	if content == "" {
+		return ManualActionPlan{}, "", fmt.Errorf("fallback manual plan missing content")
+	}
+	path := findPathCandidate(raw)
+	action := ManualAction{
+		Path:    path,
+		Mode:    "replace",
+		Content: content,
+	}
+	plan := ManualActionPlan{
+		Actions: []ManualAction{action},
+		Summary: "fallback manual plan",
+	}
+	logPath := saveRawPlan(raw)
+	plan.LogPath = logPath
+	return plan, logPath, nil
 }
 
 func workspaceFromState(state *framework.Context, task *framework.Task) string {
@@ -436,4 +472,49 @@ func manualExtensionForLang(lang string) string {
 	default:
 		return ".txt"
 	}
+}
+
+func extractPrimaryCodeBlock(raw string) string {
+	start := strings.Index(raw, "```")
+	if start == -1 {
+		return ""
+	}
+	rest := raw[start+3:]
+	if newline := strings.IndexRune(rest, '\n'); newline >= 0 {
+		rest = rest[newline+1:]
+	}
+	if end := strings.Index(rest, "```"); end >= 0 {
+		return strings.TrimSpace(rest[:end])
+	}
+	return strings.TrimSpace(rest)
+}
+
+func findPathCandidate(raw string) string {
+	lines := strings.Split(raw, "\n")
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		for _, key := range []string{"path:", "file:", "target:"} {
+			idx := strings.Index(lower, key)
+			if idx >= 0 {
+				value := strings.TrimSpace(line[idx+len(key):])
+				value = strings.Trim(value, "`*\" ")
+				if value != "" {
+					return value
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func saveRawPlan(raw string) string {
+	f, err := os.CreateTemp("", "relurpify-plan-*.txt")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if _, err := f.WriteString(raw); err != nil {
+		return ""
+	}
+	return f.Name()
 }
