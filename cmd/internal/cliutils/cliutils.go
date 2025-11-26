@@ -16,6 +16,9 @@ func BuildToolRegistry(basePath string) *framework.ToolRegistry {
 	for _, tool := range tools.FileOperations(basePath) {
 		_ = registry.Register(tool)
 	}
+	for _, tool := range tools.CommandLineTools(basePath) {
+		_ = registry.Register(tool)
+	}
 	for _, tool := range []framework.Tool{
 		&tools.GrepTool{BasePath: basePath},
 		&tools.SemanticSearchTool{BasePath: basePath},
