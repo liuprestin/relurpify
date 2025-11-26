@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
@@ -522,10 +523,6 @@ func newShellCmd() *cobra.Command {
 		Use:   "shell",
 		Short: "Interactive agent shell with autodetected tooling",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			reader := bufio.NewReader(cmd.InOrStdin())
-			if err := promptForWorkspace(cmd, reader); err != nil {
-				return err
-			}
 			if cfgFlag := cmd.Flags().Lookup("config"); cfgFlag == nil || !cfgFlag.Changed {
 				configPath = setup.DefaultConfigPath(flagWorkspace)
 			}
@@ -533,20 +530,10 @@ func newShellCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if created || len(cfg.Languages) == 0 {
-				if err := promptForLanguageSelection(cmd, reader, cfg, configPath); err != nil {
-					return err
-				}
+			if created {
+				cmd.Printf("Environment detected for workspace %s\n", workspaceFromConfig(cfg))
 			}
-			if cfg.ToolCalling == nil {
-				if err := promptForToolCalling(cmd, reader, cfg, configPath); err != nil {
-					return err
-				}
-			}
-			if err := promptForModelSelection(cmd, reader, cfg, configPath); err != nil {
-				return err
-			}
-			return runShell(cmd, reader, configPath, cfg)
+			return runShell(cmd, configPath, cfg)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", setup.DefaultConfigPath(flagWorkspace), "Config file to load/save")
@@ -572,116 +559,29 @@ func ensureShellConfig(path string, force bool) (*setup.Config, bool, error) {
 	return prev, false, nil
 }
 
-func runShell(cmd *cobra.Command, reader *bufio.Reader, configPath string, cfg *setup.Config) error {
-	out := cmd.OutOrStdout()
-	fmt.Fprintln(out, "Type 'help' for a command list. Current environment:")
-	printShellWorkspaceSummary(cmd, cfg)
-	var (
-		tc  *toolchain.Manager
-		err error
-	)
-	rebuildToolchain := func() error {
-		if tc != nil {
-			tc.Close()
-		}
-		tc, err = toolchain.NewManager(workspaceFromConfig(cfg), cfg.LSPServers)
+func runShell(cmd *cobra.Command, configPath string, cfg *setup.Config) error {
+	workspace := workspaceFromConfig(cfg)
+	eventCh := make(chan toolchain.Event, 128)
+	tc, err := toolchain.NewManager(workspace, cfg.LSPServers, eventCh)
+	if err != nil {
+		close(eventCh)
 		return err
 	}
-	if err := rebuildToolchain(); err != nil {
-		return err
-	}
+	model := newShellModel(cmd, configPath, cfg, tc, eventCh)
 	if err := tc.WarmLanguages(cfg.Languages); err != nil {
-		cmd.Printf("Toolchain warm warning: %v\n", err)
+		model.appendLog(logEntry{
+			Timestamp: time.Now(),
+			Source:    "toolchain",
+			Line:      fmt.Sprintf("warm warning: %v", err),
+		})
 	}
-	defer tc.Close()
-	for {
-		fmt.Fprint(out, "relurpify> ")
-		line, err := readLine(reader)
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		verb, rest := splitCommand(line)
-		switch verb {
-		case "help":
-			printShellHelp(cmd)
-		case "exit", "quit":
-			return nil
-		case "status":
-			printShellWorkspaceSummary(cmd, cfg)
-		case "models":
-			listModels(cmd, cfg)
-		case "use":
-			if rest == "" {
-				cmd.Println("usage: use <model>")
-				continue
-			}
-			if !cfg.SetSelectedModel(rest) {
-				cmd.Printf("model %s not in detected list\n", rest)
-				continue
-			}
-			cfg.LastUpdated = time.Now()
-			if err := setup.SaveConfig(configPath, cfg); err != nil {
-				return err
-			}
-			cmd.Printf("Default model switched to %s\n", rest)
-		case "lsps":
-			listLSPServers(cmd, cfg)
-		case "detect":
-			cfg, err = refreshShellConfig(configPath, cfg)
-			if err != nil {
-				return err
-			}
-			if err := rebuildToolchain(); err != nil {
-				return err
-			}
-			if err := tc.WarmLanguages(cfg.Languages); err != nil {
-				cmd.Printf("Toolchain warm warning: %v\n", err)
-			}
-			printShellWorkspaceSummary(cmd, cfg)
-		case "task":
-			if rest == "" {
-				cmd.Println("usage: task <instruction>")
-				continue
-			}
-			if err := shellRunTask(cmd, cfg, tc, configPath, framework.TaskTypeCodeModification, rest); err != nil {
-				reportShellError(cmd, "task", err)
-			}
-		case "write":
-			if rest == "" {
-				cmd.Println("usage: write <instruction>")
-				continue
-			}
-			if err := shellRunTask(cmd, cfg, tc, configPath, framework.TaskTypeCodeGeneration, rest); err != nil {
-				reportShellError(cmd, "write", err)
-			}
-		case "analyze":
-			if rest == "" {
-				cmd.Println("usage: analyze <instruction>")
-				continue
-			}
-			if err := shellRunTask(cmd, cfg, tc, configPath, framework.TaskTypeAnalysis, rest); err != nil {
-				reportShellError(cmd, "analyze", err)
-			}
-		case "apply":
-			file, lang, instr, err := parseApplyArgs(rest)
-			if err != nil {
-				cmd.Println(err)
-				continue
-			}
-			if err := shellRunApply(cmd, cfg, tc, configPath, file, lang, instr); err != nil {
-				reportShellError(cmd, "apply", err)
-			}
-		default:
-			cmd.Printf("unknown command: %s\n", verb)
-		}
-	}
+	program := tea.NewProgram(model, tea.WithInput(cmd.InOrStdin()), tea.WithOutput(cmd.OutOrStdout()))
+	defer func() {
+		tc.Close()
+		close(eventCh)
+	}()
+	_, err = program.Run()
+	return err
 }
 
 func refreshShellConfig(path string, prev *setup.Config) (*setup.Config, error) {
