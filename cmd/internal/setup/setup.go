@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -150,6 +151,18 @@ func detectOllama(endpoint, defaultModel string, prev *Config) OllamaConfig {
 	}
 	binPath, _ := exec.LookPath("ollama")
 	availableModels, reachable, lastErr := fetchOllamaModels(endpoint)
+	if !reachable && binPath != "" {
+		if err := tryStartOllama(binPath); err != nil {
+			if lastErr == "" {
+				lastErr = err.Error()
+			} else {
+				lastErr = lastErr + "; auto-start failed: " + err.Error()
+			}
+		} else {
+			time.Sleep(2 * time.Second)
+			availableModels, reachable, lastErr = fetchOllamaModels(endpoint)
+		}
+	}
 	selected := selectModel(defaultModel, availableModels, prev)
 	return OllamaConfig{
 		Endpoint:        endpoint,
@@ -191,6 +204,17 @@ func fetchOllamaModels(endpoint string) ([]string, bool, string) {
 	}
 	sort.Strings(models)
 	return models, true, ""
+}
+
+func tryStartOllama(binPath string) error {
+	cmd := exec.Command(binPath, "serve")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 func selectModel(defaultModel string, models []string, prev *Config) string {

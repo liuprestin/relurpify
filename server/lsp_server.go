@@ -264,8 +264,21 @@ func AgentFactory(model framework.LanguageModel, toolsRegistry *framework.ToolRe
 			Config: cfg,
 		}
 		_ = manual.Initialize(cfg)
-		delegate = manual
+		reflection := &agents.ReflectionAgent{
+			Reviewer: model,
+			Delegate: manual,
+		}
+		_ = reflection.Initialize(cfg)
+		return reflection
 	} else {
+		expert := &agents.ExpertCoderAgent{
+			Model:  model,
+			Tools:  toolsRegistry,
+			Memory: mem,
+		}
+		if err := expert.Initialize(cfg); err == nil {
+			return expert
+		}
 		coding := &agents.CodingAgent{
 			Model:  model,
 			Tools:  toolsRegistry,
