@@ -104,28 +104,48 @@ func SupportedLSPKeys() []string {
 }
 
 // NewProxyForLanguage creates a proxy and registers the descriptor's extensions. Cleanup closes the client process.
-func NewProxyForLanguage(language, root string) (*tools.Proxy, func(), error) {
+func NewProxyForLanguage(language, root string) (*tools.Proxy, *tools.ProxyInstance, func(), error) {
 	if language == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	desc, ok := LookupLSPDescriptor(language)
 	if !ok {
-		return nil, nil, fmt.Errorf("unsupported language %s", language)
+		return nil, nil, nil, fmt.Errorf("unsupported language %s", language)
 	}
 	client, err := desc.Factory(root)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	proxy := tools.NewProxy(time.Minute)
 	for _, ext := range desc.Extensions {
 		proxy.Register(ext, client)
+	}
+	var instance *tools.ProxyInstance
+	var logs <-chan string
+	if emitter, ok := client.(tools.LogEmitter); ok {
+		logs = emitter.Logs()
+	}
+	if metaProvider, ok := client.(tools.ProcessMetadataProvider); ok {
+		meta := metaProvider.ProcessMetadata()
+		instance = &tools.ProxyInstance{
+			Language: desc.ID,
+			Command:  meta.Command,
+			PID:      meta.PID,
+			Started:  meta.Started,
+			Logs:     logs,
+		}
+	} else if logs != nil {
+		instance = &tools.ProxyInstance{
+			Language: desc.ID,
+			Logs:     logs,
+		}
 	}
 	cleanup := func() {
 		if closer, ok := client.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
 	}
-	return proxy, cleanup, nil
+	return proxy, instance, cleanup, nil
 }
 
 // CanonicalLSPDescriptors returns a copy of the deduplicated descriptor map keyed by canonical ID.
