@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,9 +32,11 @@ type processLSPClient struct {
 	cmd         *exec.Cmd
 	conn        *jsonrpc2.Conn
 	cancel      context.CancelFunc
+	startedAt   time.Time
 	mu          sync.Mutex
 	openedFiles map[protocol.DocumentURI]bool
 	diagnostics map[protocol.DocumentURI][]protocol.Diagnostic
+	logCh       chan string
 }
 
 // NewProcessLSPClient launches the configured language server and performs the LSP handshake.
@@ -80,8 +83,10 @@ func NewProcessLSPClient(cfg ProcessLSPConfig) (LSPClient, error) {
 		cfg:         cfg,
 		cmd:         cmd,
 		cancel:      cancel,
+		startedAt:   time.Now(),
 		openedFiles: make(map[protocol.DocumentURI]bool),
 		diagnostics: make(map[protocol.DocumentURI][]protocol.Diagnostic),
+		logCh:       make(chan string, 256),
 	}
 
 	handler := jsonrpc2.HandlerWithError(func(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (interface{}, error) {
@@ -106,7 +111,7 @@ func NewProcessLSPClient(cfg ProcessLSPConfig) (LSPClient, error) {
 	conn := jsonrpc2.NewConn(ctx, stream, handler)
 	client.conn = conn
 
-	go io.Copy(os.Stderr, stderr)
+	go client.consumeLogs(stderr)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -120,6 +125,25 @@ func NewProcessLSPClient(cfg ProcessLSPConfig) (LSPClient, error) {
 	}
 
 	return client, nil
+}
+
+func (c *processLSPClient) consumeLogs(stderr io.Reader) {
+	defer close(c.logCh)
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		fmt.Fprintf(os.Stderr, "[%s] %s\n", c.cfg.LanguageID, line)
+		select {
+		case c.logCh <- line:
+		default:
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		select {
+		case c.logCh <- fmt.Sprintf("log stream error: %v", err):
+		default:
+		}
+	}
 }
 
 func (c *processLSPClient) initialize(ctx context.Context, root string) error {
@@ -149,6 +173,25 @@ func (c *processLSPClient) initialize(ctx context.Context, root string) error {
 		return err
 	}
 	return c.conn.Notify(ctx, "initialized", &protocol.InitializedParams{})
+}
+
+func (c *processLSPClient) Logs() <-chan string {
+	if c == nil {
+		return nil
+	}
+	return c.logCh
+}
+
+func (c *processLSPClient) ProcessMetadata() ProcessMetadata {
+	meta := ProcessMetadata{
+		Command: c.cfg.Command,
+		Args:    append([]string(nil), c.cfg.Args...),
+		Started: c.startedAt,
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
+		meta.PID = c.cmd.Process.Pid
+	}
+	return meta
 }
 
 // Close terminates the underlying process and JSON-RPC connection.

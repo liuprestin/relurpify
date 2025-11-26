@@ -95,7 +95,7 @@ func newApplyCmd() *cobra.Command {
 			}
 			var cleanup func()
 			if langKey != "" {
-				proxy, closer, err := cliutils.NewProxyForLanguage(langKey, coderWorkspace)
+				proxy, _, closer, err := cliutils.NewProxyForLanguage(langKey, coderWorkspace)
 				if err != nil {
 					return err
 				}
