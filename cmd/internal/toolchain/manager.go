@@ -1,9 +1,11 @@
 package toolchain
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
 	"github.com/lexcodex/relurpify/cmd/internal/setup"
@@ -11,23 +13,58 @@ import (
 	"github.com/lexcodex/relurpify/tools"
 )
 
+// EventType enumerates toolchain lifecycle signals.
+type EventType string
+
+const (
+	EventWarmStart    EventType = "warm_start"
+	EventWarmSuccess  EventType = "warm_success"
+	EventWarmFailed   EventType = "warm_failed"
+	EventEnsureStart  EventType = "ensure_start"
+	EventEnsureDone   EventType = "ensure_done"
+	EventEnsureFailed EventType = "ensure_failed"
+	EventShutdown     EventType = "shutdown"
+	EventLogLine      EventType = "log_line"
+)
+
+// Event describes a toolchain lifecycle or log entry.
+type Event struct {
+	Type      EventType
+	Language  string
+	Timestamp time.Time
+	Message   string
+	Err       error
+	Metadata  map[string]any
+}
+
+// Manager tracks long-lived tooling such as LSP proxies so shell sessions can reuse them.
+type proxyFactoryFunc func(language, root string) (*tools.Proxy, *tools.ProxyInstance, func(), error)
+
 // Manager tracks long-lived tooling such as LSP proxies so shell sessions can reuse them.
 type Manager struct {
 	workspace string
 	supported map[string]setup.LSPServer
+	eventSink chan<- Event
 
-	mu       sync.RWMutex
-	proxies  map[string]*tools.Proxy
-	cleanups map[string]func()
+	mu           sync.RWMutex
+	proxies      map[string]*tools.Proxy
+	cleanups     map[string]func()
+	instances    map[string]*tools.ProxyInstance
+	logStops     map[string]context.CancelFunc
+	proxyFactory proxyFactoryFunc
 }
 
 // NewManager warms up LSP servers for the provided workspace and descriptor set.
-func NewManager(workspace string, servers []setup.LSPServer) (*Manager, error) {
+func NewManager(workspace string, servers []setup.LSPServer, sink chan<- Event) (*Manager, error) {
 	m := &Manager{
-		workspace: workspace,
-		supported: make(map[string]setup.LSPServer, len(servers)),
-		proxies:   map[string]*tools.Proxy{},
-		cleanups:  map[string]func(){},
+		workspace:    workspace,
+		supported:    make(map[string]setup.LSPServer, len(servers)),
+		proxies:      map[string]*tools.Proxy{},
+		cleanups:     map[string]func(){},
+		instances:    map[string]*tools.ProxyInstance{},
+		logStops:     map[string]context.CancelFunc{},
+		eventSink:    sink,
+		proxyFactory: cliutils.NewProxyForLanguage,
 	}
 	for _, srv := range servers {
 		m.supported[srv.ID] = srv
@@ -64,9 +101,13 @@ func (m *Manager) WarmLanguages(languages []string) error {
 		if !ok || !srv.Available {
 			continue
 		}
+		m.emit(Event{Type: EventWarmStart, Language: lang, Timestamp: time.Now()})
 		if _, err := m.ensureProxy(lang); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", lang, err))
+			m.emit(Event{Type: EventWarmFailed, Language: lang, Timestamp: time.Now(), Err: err})
+			continue
 		}
+		m.emit(Event{Type: EventWarmSuccess, Language: lang, Timestamp: time.Now(), Metadata: m.serviceMetadata(lang)})
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf(strings.Join(errs, "; "))
@@ -79,7 +120,13 @@ func (m *Manager) EnsureLanguage(language string) error {
 	if language == "" {
 		return nil
 	}
+	m.emit(Event{Type: EventEnsureStart, Language: language, Timestamp: time.Now()})
 	_, err := m.ensureProxy(language)
+	if err != nil {
+		m.emit(Event{Type: EventEnsureFailed, Language: language, Timestamp: time.Now(), Err: err})
+		return err
+	}
+	m.emit(Event{Type: EventEnsureDone, Language: language, Timestamp: time.Now(), Metadata: m.serviceMetadata(language)})
 	return err
 }
 
@@ -102,9 +149,12 @@ func (m *Manager) Describe() map[string]any {
 	defer m.mu.RUnlock()
 	status := make([]map[string]any, 0, len(m.proxies))
 	for lang, proxy := range m.proxies {
+		meta := m.instances[lang]
 		status = append(status, map[string]any{
 			"language": lang,
 			"proxy":    fmt.Sprintf("%T", proxy),
+			"pid":      pidFromInstance(meta),
+			"command":  commandFromInstance(meta),
 		})
 	}
 	return map[string]any{
@@ -125,6 +175,11 @@ func (m *Manager) Close() {
 		}
 		delete(m.cleanups, key)
 		delete(m.proxies, key)
+		if cancel, ok := m.logStops[key]; ok {
+			cancel()
+			delete(m.logStops, key)
+		}
+		m.emit(Event{Type: EventShutdown, Language: key, Timestamp: time.Now()})
 	}
 }
 
@@ -162,15 +217,45 @@ func (m *Manager) ensureProxyLocked(language string) (*tools.Proxy, error) {
 	if proxy, ok := m.proxies[language]; ok {
 		return proxy, nil
 	}
-	proxy, cleanup, err := cliutils.NewProxyForLanguage(language, m.workspace)
+	proxy, instance, cleanup, err := m.proxyFactory(language, m.workspace)
 	if err != nil {
 		return nil, err
 	}
 	if proxy != nil {
 		m.proxies[language] = proxy
 		m.cleanups[language] = cleanup
+		if instance != nil {
+			m.instances[language] = instance
+			m.startLogStream(language, instance.Logs)
+		}
 	}
 	return proxy, nil
+}
+
+func (m *Manager) startLogStream(language string, logs <-chan string) {
+	if logs == nil || m.eventSink == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.logStops[language] = cancel
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case line, ok := <-logs:
+				if !ok {
+					return
+				}
+				m.emit(Event{
+					Type:      EventLogLine,
+					Language:  language,
+					Message:   line,
+					Timestamp: time.Now(),
+				})
+			}
+		}
+	}()
 }
 
 func (m *Manager) allProxies() []*tools.Proxy {
@@ -181,6 +266,45 @@ func (m *Manager) allProxies() []*tools.Proxy {
 		list = append(list, proxy)
 	}
 	return list
+}
+
+func (m *Manager) emit(evt Event) {
+	if m.eventSink == nil {
+		return
+	}
+	select {
+	case m.eventSink <- evt:
+	default:
+	}
+}
+
+func (m *Manager) serviceMetadata(language string) map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	instance := m.instances[language]
+	if instance == nil {
+		return nil
+	}
+	data := map[string]any{
+		"pid":     instance.PID,
+		"command": instance.Command,
+		"started": instance.Started,
+	}
+	return data
+}
+
+func pidFromInstance(inst *tools.ProxyInstance) int {
+	if inst == nil {
+		return 0
+	}
+	return inst.PID
+}
+
+func commandFromInstance(inst *tools.ProxyInstance) string {
+	if inst == nil {
+		return ""
+	}
+	return inst.Command
 }
 
 func uniqueLangs(langs []string) []string {
