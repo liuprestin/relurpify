@@ -63,6 +63,25 @@ Key points:
 - `persistence/workflow_store.go` – Persists `GraphSnapshot`s so interrupted
   workflows can resume exactly where they stopped.
 
+## Security & Compliance
+
+- **Sandbox runtime** – `framework/sandbox.go` enforces gVisor (`runsc`) usage and
+  validates Docker/containerd integration before any agent can execute.
+- **Permission manager** – `framework/permissions.go` implements the default-deny
+  policy. Every tool declares a permission manifest, which the manager checks
+  against the agent's `agent.manifest.yaml` and the active workspace scope. All
+  filesystem, network, IPC, capability, and executable operations pass through
+  this middleware.
+- **Agent manifest** – `framework/manifest.go` and the root `agent.manifest.yaml`
+  require explicit permission declarations, resource limits, and audit settings
+  before registration proceeds.
+- **HITL approvals** – `framework/hitl.go` introduces structured permission
+  requests, grant scopes (one-time/session/persistent/conditional), and approval
+  tracking with timeout controls.
+- **Audit logging** – `framework/audit.go` emits structured JSON logs for every
+  action, permission request, and sandbox decision. The CLI surfaces queries via
+  the runtime APIs so operations teams can satisfy compliance requirements.
+
 ## Extending the System
 
 - **New agents** – Implement the `framework.Agent` interface, register them in
