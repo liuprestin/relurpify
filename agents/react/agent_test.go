@@ -66,6 +66,13 @@ func (t stubTool) Execute(ctx context.Context, state *framework.Context, args ma
 	}, nil
 }
 func (t stubTool) IsAvailable(ctx context.Context, state *framework.Context) bool { return true }
+func (t stubTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: &framework.PermissionSet{
+		FileSystem: []framework.FileSystemPermission{
+			{Action: framework.FileSystemRead, Path: "**"},
+		},
+	}}
+}
 
 func TestReActAgentExecute(t *testing.T) {
 	llm := &stubLLM{
