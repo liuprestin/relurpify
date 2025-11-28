@@ -1,0 +1,51 @@
+apiVersion: agent.framework/v1
+kind: Agent
+metadata:
+  name: relurpify-default-agent
+  version: 1.0.0
+  description: Default sandboxed agent manifest for local Relurpify usage
+spec:
+  image: relurpify/agent:latest
+  runtime: gvisor
+  permissions:
+    filesystem:
+      - action: fs:read
+        path: ${workspace}/**
+        justification: Read project files
+      - action: fs:list
+        path: ${workspace}/**
+        justification: Enumerate workspace tree
+      - action: fs:write
+        path: ${workspace}/**
+        justification: Modify project artifacts
+      - action: fs:execute
+        path: ${workspace}/**
+        justification: Execute workspace scripts and binaries
+    executables:
+      - binary: git
+        args: ["*"]
+      - binary: go
+        args: ["*"]
+      - binary: bash
+        args: ["*"]
+      - binary: sh
+        args: ["*"]
+      - binary: python3
+        args: ["*"]
+      - binary: make
+        args: ["*"]
+    network: []
+    capabilities: []
+    ipc: []
+  resources:
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+      disk_io: "100Mi/s"
+  security:
+    run_as_user: 1000
+    read_only_root: true
+    no_new_privileges: true
+  audit:
+    level: detailed
+    retention_days: 90
