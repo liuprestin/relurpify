@@ -2,6 +2,8 @@ package framework
 
 import "testing"
 
+// TestContextSnapshotRestore verifies snapshot and restore round-trips all
+// portions of the context (values, variables, history) without data loss.
 func TestContextSnapshotRestore(t *testing.T) {
 	ctx := NewContext()
 	ctx.Set("task.id", "123")
