@@ -3,12 +3,14 @@ package toolchain
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
 	"github.com/lexcodex/relurpify/cmd/internal/setup"
+	"github.com/lexcodex/relurpify/cmd/internal/workspacecfg"
 	"github.com/lexcodex/relurpify/framework"
 	"github.com/lexcodex/relurpify/tools"
 )
@@ -74,7 +76,7 @@ func NewManager(workspace string, servers []setup.LSPServer, sink chan<- Event) 
 
 // BuildRegistry constructs a tool registry that reuses the manager's proxies. Optional language
 // hints ensure specific proxies are available for the request.
-func (m *Manager) BuildRegistry(languages ...string) (*framework.ToolRegistry, error) {
+func (m *Manager) BuildRegistry(manifestPath string, allowedTools []string, languages ...string) (*framework.ToolRegistry, error) {
 	for _, lang := range languages {
 		if lang == "" {
 			continue
@@ -86,6 +88,14 @@ func (m *Manager) BuildRegistry(languages ...string) (*framework.ToolRegistry, e
 	registry := cliutils.BuildToolRegistry(m.workspace)
 	for _, proxy := range m.allProxies() {
 		cliutils.RegisterLSPTools(registry, proxy)
+	}
+	workspacecfg.RestrictRegistry(registry, allowedTools)
+	if manifestPath == "" {
+		manifestPath = filepath.Join(m.workspace, "agent.manifest.yaml")
+	}
+	_, err := cliutils.BootstrapRuntime(context.Background(), m.workspace, manifestPath, registry)
+	if err != nil {
+		return nil, err
 	}
 	return registry, nil
 }
@@ -181,6 +191,22 @@ func (m *Manager) Close() {
 		}
 		m.emit(Event{Type: EventShutdown, Language: key, Timestamp: time.Now()})
 	}
+}
+
+// SetWorkspace switches the manager to a new workspace root, shutting down any running proxies.
+func (m *Manager) SetWorkspace(path string) {
+	if path == "" {
+		return
+	}
+	cleaned := filepath.Clean(path)
+	if cleaned == m.workspace {
+		return
+	}
+	m.Close()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workspace = cleaned
+	m.instances = map[string]*tools.ProxyInstance{}
 }
 
 // SupportsLanguage reports whether detection saw the language/server combination.
