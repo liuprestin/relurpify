@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
 	"github.com/lexcodex/relurpify/cmd/internal/setup"
 	"github.com/lexcodex/relurpify/cmd/internal/toolchain"
+	"github.com/lexcodex/relurpify/cmd/internal/workspacecfg"
 	"github.com/lexcodex/relurpify/framework"
 )
 
@@ -34,7 +36,20 @@ func newShellCmd() *cobra.Command {
 			if created {
 				cmd.Printf("Environment detected for workspace %s\n", workspaceFromConfig(cfg))
 			}
-			return runShell(cmd, configPath, cfg)
+			wsRoot := workspaceFromConfig(cfg)
+			wsCfg, wsErr := workspacecfg.Load(wsRoot)
+			if wsErr != nil {
+				if !os.IsNotExist(wsErr) {
+					return wsErr
+				}
+				wsCfg = nil
+			}
+			if wsCfg != nil {
+				if err := workspacecfg.EnsureManifests(wsCfg); err != nil {
+					return err
+				}
+			}
+			return runShell(cmd, configPath, cfg, wsCfg)
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", setup.DefaultConfigPath(flagWorkspace), "Config file to load/save")
@@ -60,21 +75,26 @@ func ensureShellConfig(path string, force bool) (*setup.Config, bool, error) {
 	return prev, false, nil
 }
 
-func runShell(cmd *cobra.Command, configPath string, cfg *setup.Config) error {
+func runShell(cmd *cobra.Command, configPath string, cfg *setup.Config, wsCfg *workspacecfg.WorkspaceConfig) error {
 	workspace := workspaceFromConfig(cfg)
+	if wsCfg != nil && wsCfg.Workspace != "" {
+		workspace = wsCfg.Workspace
+	}
 	eventCh := make(chan toolchain.Event, 128)
 	tc, err := toolchain.NewManager(workspace, cfg.LSPServers, eventCh)
 	if err != nil {
 		close(eventCh)
 		return err
 	}
-	model := newShellModel(cmd, configPath, cfg, tc, eventCh)
-	if err := tc.WarmLanguages(cfg.Languages); err != nil {
-		model.appendLog(logEntry{
-			Timestamp: time.Now(),
-			Source:    "toolchain",
-			Line:      fmt.Sprintf("warm warning: %v", err),
-		})
+	model := newShellModel(cmd, configPath, cfg, wsCfg, tc, eventCh)
+	if model.phase == phaseShell {
+		if err := tc.WarmLanguages(cfg.Languages); err != nil {
+			model.appendLog(logEntry{
+				Timestamp: time.Now(),
+				Source:    "toolchain",
+				Line:      fmt.Sprintf("warm warning: %v", err),
+			})
+		}
 	}
 	program := tea.NewProgram(model, tea.WithInput(cmd.InOrStdin()), tea.WithOutput(cmd.OutOrStdout()))
 	defer func() {
