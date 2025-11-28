@@ -11,8 +11,9 @@ import (
 )
 
 func TestShellWizardFlow(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := &setup.Config{
-		Workspace: ".",
+		Workspace: tmpDir,
 		Languages: []string{"go"},
 		Ollama: setup.OllamaConfig{
 			AvailableModels: []string{"deepseek", "qwen"},
@@ -23,11 +24,17 @@ func TestShellWizardFlow(t *testing.T) {
 			{ID: "rust", Language: "Rust", Available: false},
 		},
 	}
-	tc, err := toolchain.NewManager(".", cfg.LSPServers, nil)
+	tc, err := toolchain.NewManager(tmpDir, cfg.LSPServers, nil)
 	require.NoError(t, err)
-	model := newShellModel(nil, "", cfg, tc, nil)
+	model := newShellModel(nil, "", cfg, nil, tc, nil)
 
 	require.Equal(t, wizardStepWorkspace, model.wizard.step)
+	model.advanceWizard()
+	require.Equal(t, wizardStepAgents, model.wizard.step)
+
+	model.advanceWizard()
+	require.Equal(t, wizardStepToolAllowlist, model.wizard.step)
+
 	model.advanceWizard()
 	require.Equal(t, wizardStepModel, model.wizard.step)
 
@@ -54,7 +61,7 @@ func TestShellDetectionAndJobMessages(t *testing.T) {
 	}
 	tc, err := toolchain.NewManager(".", nil, nil)
 	require.NoError(t, err)
-	model := newShellModel(nil, "", cfg, tc, nil)
+	model := newShellModel(nil, "", cfg, nil, tc, nil)
 	model.phase = phaseShell
 
 	model.Update(detectionProgressMsg{Language: "go", Index: 0, Total: 2, Status: "checking"})
