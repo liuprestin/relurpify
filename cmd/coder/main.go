@@ -108,6 +108,11 @@ func newApplyCmd() *cobra.Command {
 				defer cleanup()
 			}
 
+			manifestPath := envOrDefault("RELURPIFY_MANIFEST", filepath.Join(coderWorkspace, "agent.manifest.yaml"))
+			if _, err := cliutils.BootstrapRuntime(cmd.Context(), coderWorkspace, manifestPath, registry); err != nil {
+				return err
+			}
+
 			modelClient := llm.NewClient(coderEndpoint, coderModel)
 			agent := server.AgentFactory(modelClient, registry, memory, cfg)
 
