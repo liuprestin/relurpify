@@ -53,6 +53,10 @@ func (t *ReadFileTool) IsAvailable(ctx context.Context, state *framework.Context
 	return true
 }
 
+func (t *ReadFileTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.BasePath, framework.FileSystemRead)}
+}
+
 // WriteFileTool writes content to disk.
 type WriteFileTool struct {
 	BasePath string
@@ -86,6 +90,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, state *framework.Context, a
 }
 func (t *WriteFileTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return true
+}
+
+func (t *WriteFileTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.BasePath, framework.FileSystemWrite)}
 }
 
 // ListFilesTool lists files filtered by pattern.
@@ -129,6 +137,10 @@ func (t *ListFilesTool) Execute(ctx context.Context, state *framework.Context, a
 }
 func (t *ListFilesTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return true
+}
+
+func (t *ListFilesTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.BasePath, framework.FileSystemList)}
 }
 
 // SearchInFilesTool greps for a pattern.
@@ -192,6 +204,10 @@ func (t *SearchInFilesTool) IsAvailable(ctx context.Context, state *framework.Co
 	return true
 }
 
+func (t *SearchInFilesTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.BasePath, framework.FileSystemRead, framework.FileSystemList)}
+}
+
 // CreateFileTool creates a file from a template string.
 type CreateFileTool struct {
 	BasePath string
@@ -218,6 +234,10 @@ func (t *CreateFileTool) Execute(ctx context.Context, state *framework.Context, 
 }
 func (t *CreateFileTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return true
+}
+
+func (t *CreateFileTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.BasePath, framework.FileSystemWrite)}
 }
 
 // DeleteFileTool moves a file to .trash folder instead of deleting permanently.
@@ -253,6 +273,10 @@ func (t *DeleteFileTool) Execute(ctx context.Context, state *framework.Context, 
 }
 func (t *DeleteFileTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return true
+}
+
+func (t *DeleteFileTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.BasePath, framework.FileSystemWrite)}
 }
 
 func (t *ReadFileTool) preparePath(path string) string  { return preparePath(t.BasePath, path) }
