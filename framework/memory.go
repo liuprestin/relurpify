@@ -71,6 +71,8 @@ func NewHybridMemory(basePath string) (*HybridMemory, error) {
 	return store, nil
 }
 
+// loadFromDisk hydrates the in-memory cache from JSON files previously written
+// to disk. Missing files are ignored so the store can start empty on first run.
 func (m *HybridMemory) loadFromDisk() error {
 	for scope := range m.cache {
 		path := m.scopePath(scope)
@@ -92,6 +94,8 @@ func (m *HybridMemory) loadFromDisk() error {
 	return nil
 }
 
+// persist writes the cached records for a scope back to disk so that project
+// and global memories survive process restarts.
 func (m *HybridMemory) persist(scope MemoryScope) error {
 	records := make([]MemoryRecord, 0, len(m.cache[scope]))
 	for _, r := range m.cache[scope] {
@@ -104,6 +108,8 @@ func (m *HybridMemory) persist(scope MemoryScope) error {
 	return os.WriteFile(m.scopePath(scope), data, 0o644)
 }
 
+// scopePath resolves the JSON file associated with a scope so all persistence
+// logic shares the same directory layout.
 func (m *HybridMemory) scopePath(scope MemoryScope) string {
 	filename := string(scope) + ".json"
 	return filepath.Join(m.basePath, filename)
