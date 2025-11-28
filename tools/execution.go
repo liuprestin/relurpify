@@ -54,6 +54,13 @@ func (t *RunTestsTool) IsAvailable(ctx context.Context, state *framework.Context
 	return len(t.Command) > 0
 }
 
+func (t *RunTestsTool) Permissions() framework.ToolPermissions {
+	if len(t.Command) == 0 {
+		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead, framework.FileSystemList)}
+	}
+	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
+}
+
 // ExecuteCodeTool runs arbitrary snippets inside an interpreter.
 type ExecuteCodeTool struct {
 	Command []string
@@ -90,6 +97,21 @@ func (t *ExecuteCodeTool) Execute(ctx context.Context, state *framework.Context,
 }
 func (t *ExecuteCodeTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return len(t.Command) > 0
+}
+
+func (t *ExecuteCodeTool) Permissions() framework.ToolPermissions {
+	if len(t.Command) == 0 {
+		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead)}
+	}
+	perms := framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)
+	// Arbitrary code execution should always require HITL.
+	for i := range perms.FileSystem {
+		perms.FileSystem[i].HITLRequired = true
+	}
+	if len(perms.Executables) > 0 {
+		perms.Executables[0].HITLRequired = true
+	}
+	return framework.ToolPermissions{Permissions: perms}
 }
 
 // RunLinterTool executes lint commands.
@@ -131,6 +153,13 @@ func (t *RunLinterTool) IsAvailable(ctx context.Context, state *framework.Contex
 	return len(t.Command) > 0
 }
 
+func (t *RunLinterTool) Permissions() framework.ToolPermissions {
+	if len(t.Command) == 0 {
+		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead)}
+	}
+	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
+}
+
 // RunBuildTool runs arbitrary build commands.
 type RunBuildTool struct {
 	Command []string
@@ -162,6 +191,13 @@ func (t *RunBuildTool) Execute(ctx context.Context, state *framework.Context, ar
 }
 func (t *RunBuildTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return len(t.Command) > 0
+}
+
+func (t *RunBuildTool) Permissions() framework.ToolPermissions {
+	if len(t.Command) == 0 {
+		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead)}
+	}
+	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
 }
 
 func runCommand(ctx context.Context, workdir string, timeout time.Duration, args ...string) (string, string, error) {
