@@ -22,6 +22,7 @@ import (
 	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
 	"github.com/lexcodex/relurpify/cmd/internal/setup"
 	"github.com/lexcodex/relurpify/cmd/internal/toolchain"
+	"github.com/lexcodex/relurpify/cmd/internal/workspacecfg"
 	"github.com/lexcodex/relurpify/framework"
 	"github.com/lexcodex/relurpify/llm"
 	"github.com/lexcodex/relurpify/server"
@@ -95,6 +96,8 @@ type wizardStep int
 
 const (
 	wizardStepWorkspace wizardStep = iota
+	wizardStepAgents
+	wizardStepToolAllowlist
 	wizardStepModel
 	wizardStepLanguages
 	wizardStepTooling
@@ -109,6 +112,7 @@ type shellModel struct {
 	cmd               *cobra.Command
 	configPath        string
 	cfg               *setup.Config
+	workspaceCfg      *workspacecfg.WorkspaceConfig
 	tc                *toolchain.Manager
 	eventCh           <-chan toolchain.Event
 	logStream         chan tea.Msg
@@ -120,8 +124,11 @@ type shellModel struct {
 	height            int
 	activePane        shellPane
 	textInput         textinput.Model
+	workspaceInput    textinput.Model
 	modelsList        list.Model
 	lspsList          list.Model
+	agentsList        list.Model
+	toolsList         list.Model
 	historyPort       viewport.Model
 	logPort           viewport.Model
 	timelinePort      viewport.Model
@@ -138,13 +145,20 @@ type shellModel struct {
 	statusLine        string
 	detection         detectionState
 	selectedLanguages map[string]bool
+	selectedAgents    map[string]bool
+	selectedTools     map[string]bool
+	toolOptions       []string
 }
 
-func newShellModel(cmd *cobra.Command, configPath string, cfg *setup.Config, tc *toolchain.Manager, tcEvents <-chan toolchain.Event) *shellModel {
+func newShellModel(cmd *cobra.Command, configPath string, cfg *setup.Config, wsCfg *workspacecfg.WorkspaceConfig, tc *toolchain.Manager, tcEvents <-chan toolchain.Event) *shellModel {
 	txt := textinput.New()
 	txt.Placeholder = "Type a command (task, write, analyze, apply, detect, wizard, quit)"
 	txt.Focus()
 	txt.CharLimit = 512
+
+	workspaceInput := textinput.New()
+	workspaceInput.Placeholder = "Workspace root"
+	workspaceInput.CharLimit = 512
 
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
@@ -154,6 +168,12 @@ func newShellModel(cmd *cobra.Command, configPath string, cfg *setup.Config, tc 
 
 	lspsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 20, 10)
 	lspsList.Title = "LSP Servers"
+
+	agentsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 20, 10)
+	agentsList.Title = "Agents"
+
+	toolsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 20, 10)
+	toolsList.Title = "Allowed Tools"
 
 	historyPort := viewport.New(40, 10)
 	logPort := viewport.New(40, 10)
@@ -178,38 +198,89 @@ func newShellModel(cmd *cobra.Command, configPath string, cfg *setup.Config, tc 
 	wizard := &wizardModel{step: wizardStepWorkspace}
 
 	progress := progress.New(progress.WithDefaultGradient())
-	selected := initialLanguageSelection(cfg)
+	selectedLangs := initialLanguageSelection(cfg)
+
+	workRoot := workspaceFromConfig(cfg)
+	if wsCfg != nil && wsCfg.Workspace != "" {
+		workRoot = wsCfg.Workspace
+	}
+	if wsCfg == nil {
+		wsCfg = &workspacecfg.WorkspaceConfig{
+			Workspace:     workRoot,
+			DefaultAgent:  "coding",
+			Agents:        []workspacecfg.AgentConfig{{Name: "coding", Enabled: true}, {Name: "expert", Enabled: false}, {Name: "manual", Enabled: false}},
+			AllowedTools:  defaultToolOptions(workRoot),
+			Prerequisites: []string{"ollama", "docker", "runsc"},
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
+		}
+	}
+	toolOptions := defaultToolOptions(workRoot)
+	if len(toolOptions) == 0 {
+		toolOptions = wsCfg.AllowedTools
+	}
+	workspaceInput.SetValue(workRoot)
+	selectedAgents := map[string]bool{}
+	for _, agent := range wsCfg.Agents {
+		if agent.Enabled {
+			selectedAgents[strings.ToLower(agent.Name)] = true
+		}
+	}
+	if len(selectedAgents) == 0 {
+		selectedAgents["coding"] = true
+	}
+	selectedTools := map[string]bool{}
+	if len(wsCfg.AllowedTools) == 0 {
+		for _, tool := range toolOptions {
+			selectedTools[tool] = true
+		}
+	} else {
+		for _, tool := range wsCfg.AllowedTools {
+			selectedTools[tool] = true
+		}
+	}
 
 	model := &shellModel{
-		cmd:          cmd,
-		configPath:   configPath,
-		cfg:          cfg,
-		tc:           tc,
-		eventCh:      tcEvents,
-		phase:        phaseWizard,
-		wizard:       wizard,
-		activePane:   paneSummary,
-		textInput:    txt,
-		modelsList:   modelsList,
-		lspsList:     lspsList,
-		historyPort:  historyPort,
-		logPort:      logPort,
-		timelinePort: timelinePort,
-		servicesTbl:  servicesTbl,
-		jobsTbl:      jobsTbl,
-		spinner:      spin,
-		progress:     progress,
-		history:      []string{},
-		logs:         []logEntry{},
-		timeline:     []timelineEntry{},
-		jobs:         map[string]*jobEntry{},
-		detection: detectionState{
-			Status: map[string]string{},
-		},
+		cmd:               cmd,
+		configPath:        configPath,
+		cfg:               cfg,
+		workspaceCfg:      wsCfg,
+		tc:                tc,
+		eventCh:           tcEvents,
+		phase:             phaseWizard,
+		wizard:            wizard,
+		activePane:        paneSummary,
+		textInput:         txt,
+		workspaceInput:    workspaceInput,
+		modelsList:        modelsList,
+		lspsList:          lspsList,
+		agentsList:        agentsList,
+		toolsList:         toolsList,
+		historyPort:       historyPort,
+		logPort:           logPort,
+		timelinePort:      timelinePort,
+		servicesTbl:       servicesTbl,
+		jobsTbl:           jobsTbl,
+		spinner:           spin,
+		progress:          progress,
+		history:           []string{},
+		logs:              []logEntry{},
+		timeline:          []timelineEntry{},
+		jobs:              map[string]*jobEntry{},
+		detection:         detectionState{Status: map[string]string{}},
 		logStream:         make(chan tea.Msg, 32),
 		timelineCh:        make(chan tea.Msg, 32),
 		detectCh:          make(chan tea.Msg, 32),
-		selectedLanguages: selected,
+		selectedLanguages: selectedLangs,
+		selectedAgents:    selectedAgents,
+		selectedTools:     selectedTools,
+		toolOptions:       toolOptions,
+	}
+	if wsCfg != nil && len(wsCfg.Agents) > 0 {
+		model.phase = phaseShell
+		model.workspaceInput.Blur()
+	} else {
+		model.workspaceInput.Focus()
 	}
 	model.refreshLists()
 	return model
@@ -334,10 +405,15 @@ func (m *shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "shift+tab", "left", "h":
 				m.rewindWizard()
 			case " ":
-				if m.wizard.step == wizardStepLanguages {
+				switch m.wizard.step {
+				case wizardStepLanguages:
 					m.toggleSelectedLanguage()
-				} else if m.wizard.step == wizardStepTooling {
+				case wizardStepTooling:
 					m.toggleToolCalling()
+				case wizardStepAgents:
+					m.toggleAgentSelection()
+				case wizardStepToolAllowlist:
+					m.toggleToolSelection()
 				}
 			case "enter":
 				if cmd := m.advanceWizard(); cmd != nil {
@@ -435,6 +511,12 @@ func (m *shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.phase == phaseWizard {
 		var cmd tea.Cmd
 		switch m.wizard.step {
+		case wizardStepWorkspace:
+			m.workspaceInput, cmd = m.workspaceInput.Update(msg)
+		case wizardStepAgents:
+			m.agentsList, cmd = m.agentsList.Update(msg)
+		case wizardStepToolAllowlist:
+			m.toolsList, cmd = m.toolsList.Update(msg)
 		case wizardStepModel:
 			m.modelsList, cmd = m.modelsList.Update(msg)
 		case wizardStepLanguages:
@@ -481,7 +563,21 @@ func (m *shellModel) View() string {
 func (m *shellModel) renderWizard() string {
 	switch m.wizard.step {
 	case wizardStepWorkspace:
-		return fmt.Sprintf("Workspace detected: %s\nPress Enter to continue to model selection.", workspaceFromConfig(m.cfg))
+		var b strings.Builder
+		b.WriteString("Choose the workspace root. Relurpify will store relurpify_config/* inside this directory.\n")
+		b.WriteString(m.workspaceInput.View())
+		b.WriteString("\nPress Enter to continue.")
+		return b.String()
+	case wizardStepAgents:
+		var b strings.Builder
+		b.WriteString("Select agents to enable (space toggles). Enter to continue.\n")
+		b.WriteString(m.agentsList.View())
+		return b.String()
+	case wizardStepToolAllowlist:
+		var b strings.Builder
+		b.WriteString("Select allowed tools (space toggles). Enter to continue.\n")
+		b.WriteString(m.toolsList.View())
+		return b.String()
 	case wizardStepModel:
 		var b strings.Builder
 		b.WriteString("Select default model (use j/k and enter):\n")
@@ -506,6 +602,31 @@ func (m *shellModel) renderWizard() string {
 func (m *shellModel) advanceWizard() tea.Cmd {
 	switch m.wizard.step {
 	case wizardStepWorkspace:
+		if err := m.setWorkspacePath(m.workspaceInput.Value()); err != nil {
+			m.statusLine = err.Error()
+			return nil
+		}
+		m.workspaceInput.Blur()
+		if m.workspaceCfg != nil {
+			m.statusLine = fmt.Sprintf("Workspace set to %s", m.workspaceCfg.Workspace)
+		}
+		m.wizard.step = wizardStepAgents
+	case wizardStepAgents:
+		m.workspaceCfg.Agents = m.selectedAgentConfigs()
+		if len(m.workspaceCfg.Agents) == 0 {
+			m.statusLine = "select at least one agent"
+			return nil
+		}
+		m.workspaceCfg.DefaultAgent = m.workspaceCfg.Agents[0].Name
+		m.wizard.step = wizardStepToolAllowlist
+	case wizardStepToolAllowlist:
+		m.workspaceCfg.AllowedTools = m.selectedToolValues()
+		if len(m.workspaceCfg.Prerequisites) == 0 {
+			m.workspaceCfg.Prerequisites = []string{"ollama", "docker", "runsc"}
+		}
+		if err := workspacecfg.Save(m.workspaceCfg); err != nil {
+			m.statusLine = err.Error()
+		}
 		m.wizard.step = wizardStepModel
 	case wizardStepModel:
 		if item, ok := m.modelsList.SelectedItem().(uiListItem); ok {
@@ -526,6 +647,12 @@ func (m *shellModel) advanceWizard() tea.Cmd {
 	case wizardStepTooling:
 		m.wizard.step = wizardStepComplete
 		_ = setup.SaveConfig(m.configPath, m.cfg)
+		if err := workspacecfg.EnsureManifests(m.workspaceCfg); err != nil {
+			m.statusLine = err.Error()
+		}
+		if err := workspacecfg.Save(m.workspaceCfg); err != nil {
+			m.statusLine = err.Error()
+		}
 		m.phase = phaseShell
 		return nil
 	}
@@ -537,6 +664,9 @@ func (m *shellModel) rewindWizard() {
 		return
 	}
 	m.wizard.step--
+	if m.wizard.step == wizardStepWorkspace {
+		m.workspaceInput.Focus()
+	}
 }
 
 func saveWizardConfig(path string, cfg *setup.Config) {
@@ -558,7 +688,7 @@ func (m *shellModel) handleSubmittedCommand() tea.Cmd {
 	case "quit", "exit":
 		return tea.Quit
 	case "status":
-		m.statusLine = fmt.Sprintf("Workspace: %s, Model: %s", workspaceFromConfig(m.cfg), m.cfg.ModelOrDefault(flagModel))
+		m.statusLine = fmt.Sprintf("Workspace: %s, Model: %s", m.activeWorkspace(), m.cfg.ModelOrDefault(flagModel))
 	case "detect":
 		return m.runDetection()
 	case "task":
@@ -589,11 +719,43 @@ func (m *shellModel) handleSubmittedCommand() tea.Cmd {
 	case "wizard":
 		m.phase = phaseWizard
 		m.wizard.step = wizardStepWorkspace
+		m.workspaceInput.SetValue(m.activeWorkspace())
+		m.workspaceInput.Focus()
+		m.refreshLists()
+		return nil
+	case "prereqs":
+		m.runPrereqCheck()
 		return nil
 	default:
 		m.statusLine = fmt.Sprintf("unknown command: %s", verb)
 	}
 	return nil
+}
+
+func (m *shellModel) runPrereqCheck() {
+	if m.workspaceCfg == nil {
+		m.statusLine = "workspace config missing"
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	results := workspacecfg.CheckPrerequisites(ctx, m.workspaceCfg)
+	if len(results) == 0 {
+		m.statusLine = "No prerequisites configured"
+		return
+	}
+	for _, res := range results {
+		line := fmt.Sprintf("%s: %s", res.Name, res.Status)
+		if res.Details != "" {
+			line = fmt.Sprintf("%s (%s)", line, res.Details)
+		}
+		m.appendLog(logEntry{
+			Timestamp: time.Now(),
+			Source:    "prereqs",
+			Line:      line,
+		})
+	}
+	m.statusLine = "Prerequisite check complete"
 }
 
 func (m *shellModel) runDetection() tea.Cmd {
@@ -643,7 +805,7 @@ func (m *shellModel) launchJob(jobID, label string, taskType framework.TaskType,
 		if job == nil {
 			return
 		}
-		workspace := workspaceFromConfig(m.cfg)
+		workspace := m.activeWorkspace()
 		agentCfg := buildFrameworkConfig(m.cfg)
 		memory, err := framework.NewHybridMemory(filepath.Join(workspace, ".memory"))
 		if err != nil {
@@ -667,7 +829,13 @@ func (m *shellModel) launchJob(jobID, label string, taskType framework.TaskType,
 			m.finishJob(jobID, nil, nil, tcErr)
 			return
 		}
-		registry, err = m.tc.BuildRegistry(lang)
+		manifestPath := ""
+		var allowedTools []string
+		if m.workspaceCfg != nil {
+			manifestPath, _ = m.workspaceCfg.ManifestForAgent(m.workspaceCfg.DefaultAgent)
+			allowedTools = append([]string(nil), m.workspaceCfg.AllowedTools...)
+		}
+		registry, err = m.tc.BuildRegistry(manifestPath, allowedTools, lang)
 		if err != nil {
 			m.finishJob(jobID, nil, nil, err)
 			return
@@ -756,7 +924,7 @@ func (m *shellModel) streamContext(ctx context.Context, jobID string, state *fra
 }
 
 func (m *shellModel) renderStatusBar() string {
-	status := fmt.Sprintf("Workspace: %s | Model: %s", workspaceFromConfig(m.cfg), m.cfg.ModelOrDefault(flagModel))
+	status := fmt.Sprintf("Workspace: %s | Model: %s", m.activeWorkspace(), m.cfg.ModelOrDefault(flagModel))
 	if m.detection.Running {
 		pct := float64(m.detection.Progress) / float64(max(1, m.detection.Total))
 		status += " | Detecting " + m.progress.ViewAs(pct)
@@ -770,10 +938,14 @@ func (m *shellModel) renderStatusBar() string {
 func (m *shellModel) renderSummaryPane() string {
 	var b strings.Builder
 	b.WriteString("Environment Summary\n")
-	b.WriteString(fmt.Sprintf("Workspace: %s\n", workspaceFromConfig(m.cfg)))
+	b.WriteString(fmt.Sprintf("Workspace: %s\n", m.activeWorkspace()))
 	b.WriteString(fmt.Sprintf("Model: %s\n", m.cfg.ModelOrDefault(flagModel)))
 	b.WriteString(fmt.Sprintf("Languages: %s\n", strings.Join(m.cfg.Languages, ", ")))
-	b.WriteString("Agents: coding\n")
+	agents := m.enabledAgentNames()
+	if len(agents) == 0 {
+		agents = []string{"(none)"}
+	}
+	b.WriteString(fmt.Sprintf("Agents: %s\n", strings.Join(agents, ", ")))
 	b.WriteString("\nModels:\n")
 	b.WriteString(m.modelsList.View())
 	b.WriteString("\nLSP Servers:\n")
@@ -862,6 +1034,8 @@ func (m *shellModel) refreshLists() {
 	}
 	m.modelsList.SetItems(items)
 	m.refreshLanguageList()
+	m.refreshAgentList()
+	m.refreshToolList()
 	m.refreshServicesTable()
 }
 
@@ -967,6 +1141,91 @@ func (m *shellModel) toggleToolCalling() {
 	m.cfg.ToolCalling = &next
 }
 
+func (m *shellModel) toggleAgentSelection() {
+	if len(m.agentsList.Items()) == 0 {
+		return
+	}
+	if item, ok := m.agentsList.SelectedItem().(uiListItem); ok {
+		key := strings.ToLower(item.value)
+		m.selectedAgents[key] = !m.selectedAgents[key]
+		m.refreshAgentList()
+	}
+}
+
+func (m *shellModel) toggleToolSelection() {
+	if len(m.toolsList.Items()) == 0 {
+		return
+	}
+	if item, ok := m.toolsList.SelectedItem().(uiListItem); ok {
+		key := item.value
+		m.selectedTools[key] = !m.selectedTools[key]
+		m.refreshToolList()
+	}
+}
+
+func (m *shellModel) setWorkspacePath(raw string) error {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		path = m.activeWorkspace()
+	}
+	path = os.ExpandEnv(path)
+	abs := path
+	if !filepath.IsAbs(abs) {
+		var err error
+		abs, err = filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return err
+	}
+	if m.workspaceCfg != nil {
+		m.workspaceCfg.Workspace = abs
+	}
+	if m.cfg != nil {
+		m.cfg.Workspace = abs
+		m.cfg.LastUpdated = time.Now()
+		_ = setup.SaveConfig(m.configPath, m.cfg)
+	}
+	if m.tc != nil {
+		m.tc.SetWorkspace(abs)
+	}
+	m.workspaceInput.SetValue(abs)
+	m.rebuildToolOptions(abs)
+	return nil
+}
+
+func (m *shellModel) rebuildToolOptions(workspace string) {
+	options := defaultToolOptions(workspace)
+	if len(options) == 0 && m.workspaceCfg != nil && len(m.workspaceCfg.AllowedTools) > 0 {
+		options = append([]string(nil), m.workspaceCfg.AllowedTools...)
+	}
+	if len(options) == 0 {
+		m.toolOptions = nil
+		m.selectedTools = map[string]bool{}
+		m.refreshToolList()
+		return
+	}
+	if m.selectedTools == nil {
+		m.selectedTools = map[string]bool{}
+	}
+	selection := map[string]bool{}
+	for _, name := range options {
+		if m.selectedTools[name] {
+			selection[name] = true
+		}
+	}
+	if len(selection) == 0 {
+		for _, name := range options {
+			selection[name] = true
+		}
+	}
+	m.toolOptions = options
+	m.selectedTools = selection
+	m.refreshToolList()
+}
+
 func initialLanguageSelection(cfg *setup.Config) map[string]bool {
 	selected := map[string]bool{}
 	if cfg == nil {
@@ -980,6 +1239,115 @@ func initialLanguageSelection(cfg *setup.Config) map[string]bool {
 		selected[key] = true
 	}
 	return selected
+}
+
+func (m *shellModel) selectedAgentConfigs() []workspacecfg.AgentConfig {
+	opts := agentOptions()
+	result := make([]workspacecfg.AgentConfig, 0, len(opts))
+	for _, opt := range opts {
+		key := strings.ToLower(opt.Name)
+		cfg := workspacecfg.AgentConfig{
+			Name:        opt.Name,
+			Description: opt.Description,
+			Enabled:     m.selectedAgents[key],
+			Manifest:    workspacecfg.AgentManifestPath(m.activeWorkspace(), opt.Name),
+		}
+		result = append(result, cfg)
+	}
+	return result
+}
+
+func (m *shellModel) selectedToolValues() []string {
+	var values []string
+	for _, tool := range m.toolOptions {
+		if m.selectedTools[tool] {
+			values = append(values, tool)
+		}
+	}
+	if len(values) == 0 {
+		return append([]string(nil), m.toolOptions...)
+	}
+	return values
+}
+
+func (m *shellModel) refreshAgentList() {
+	items := make([]list.Item, 0, len(agentOptions()))
+	for _, opt := range agentOptions() {
+		key := strings.ToLower(opt.Name)
+		check := " "
+		if m.selectedAgents[key] {
+			check = "x"
+		}
+		title := fmt.Sprintf("[%s] %s", check, strings.Title(opt.Name))
+		items = append(items, uiListItem{
+			title: title,
+			value: key,
+			desc:  opt.Description,
+		})
+	}
+	m.agentsList.SetItems(items)
+}
+
+func (m *shellModel) refreshToolList() {
+	items := make([]list.Item, 0, len(m.toolOptions))
+	for _, name := range m.toolOptions {
+		check := " "
+		if m.selectedTools[name] {
+			check = "x"
+		}
+		items = append(items, uiListItem{
+			title: fmt.Sprintf("[%s] %s", check, name),
+			value: name,
+		})
+	}
+	m.toolsList.SetItems(items)
+}
+
+func (m *shellModel) activeWorkspace() string {
+	if m.workspaceCfg != nil && m.workspaceCfg.Workspace != "" {
+		if abs, err := filepath.Abs(m.workspaceCfg.Workspace); err == nil {
+			return abs
+		}
+		return m.workspaceCfg.Workspace
+	}
+	return workspaceFromConfig(m.cfg)
+}
+
+func defaultToolOptions(workspace string) []string {
+	registry := cliutils.BuildToolRegistry(workspace)
+	tools := registry.All()
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	return names
+}
+
+func agentOptions() []workspacecfg.AgentConfig {
+	return []workspacecfg.AgentConfig{
+		{Name: "coding", Description: "General coding agent"},
+		{Name: "expert", Description: "Expert multi-delegate agent"},
+		{Name: "manual", Description: "Manual coding agent"},
+	}
+}
+
+func (m *shellModel) enabledAgentNames() []string {
+	var names []string
+	if m.workspaceCfg != nil && len(m.workspaceCfg.Agents) > 0 {
+		for _, agent := range m.workspaceCfg.Agents {
+			if agent.Enabled {
+				names = append(names, agent.Name)
+			}
+		}
+	}
+	if len(names) == 0 && len(m.selectedAgents) > 0 {
+		for _, opt := range agentOptions() {
+			if m.selectedAgents[strings.ToLower(opt.Name)] {
+				names = append(names, opt.Name)
+			}
+		}
+	}
+	return names
 }
 
 func max(a, b int) int {
