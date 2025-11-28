@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+// TestInMemoryVectorStore exercises the happy path for insert/query/delete to
+// ensure the educational TF model behaves as expected.
 func TestInMemoryVectorStore(t *testing.T) {
 	store := NewInMemoryVectorStore()
 	ctx := context.Background()
