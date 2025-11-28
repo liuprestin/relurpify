@@ -131,3 +131,7 @@ func (t *GitCommandTool) IsAvailable(ctx context.Context, state *framework.Conte
 	}
 	return true
 }
+
+func (t *GitCommandTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.RepoPath, "git", []string{"*"})}
+}
