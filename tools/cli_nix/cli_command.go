@@ -102,6 +102,11 @@ func (t *CommandTool) IsAvailable(ctx context.Context, state *framework.Context)
 	return err == nil
 }
 
+func (t *CommandTool) Permissions() framework.ToolPermissions {
+	perms := framework.NewExecutionPermissionSet(t.basePath, t.cfg.Command, append([]string{}, t.cfg.DefaultArgs...))
+	return framework.ToolPermissions{Permissions: perms}
+}
+
 func toStringSlice(value interface{}) ([]string, error) {
 	if value == nil {
 		return nil, nil
