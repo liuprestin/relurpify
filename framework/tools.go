@@ -3,6 +3,7 @@ package framework
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -16,6 +17,7 @@ type Tool interface {
 	Parameters() []ToolParameter
 	Execute(ctx context.Context, state *Context, args map[string]interface{}) (*ToolResult, error)
 	IsAvailable(ctx context.Context, state *Context) bool
+	Permissions() ToolPermissions
 }
 
 // ToolParameter describes an argument the tool accepts.
@@ -39,8 +41,10 @@ type ToolResult struct {
 // typically keep a shared registry instance so dynamic planners can discover
 // the available affordances at runtime.
 type ToolRegistry struct {
-	mu    sync.RWMutex
-	tools map[string]Tool
+	mu                sync.RWMutex
+	tools             map[string]Tool
+	permissionManager *PermissionManager
+	registeredAgentID string
 }
 
 // NewToolRegistry builds a registry instance.
@@ -57,7 +61,7 @@ func (r *ToolRegistry) Register(tool Tool) error {
 	if _, exists := r.tools[tool.Name()]; exists {
 		return fmt.Errorf("tool %s already registered", tool.Name())
 	}
-	r.tools[tool.Name()] = tool
+	r.tools[tool.Name()] = r.wrapTool(tool)
 	return nil
 }
 
@@ -78,4 +82,75 @@ func (r *ToolRegistry) All() []Tool {
 		res = append(res, t)
 	}
 	return res
+}
+
+// UsePermissionManager enables default-deny enforcement for all tools.
+func (r *ToolRegistry) UsePermissionManager(agentID string, manager *PermissionManager) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.permissionManager = manager
+	r.registeredAgentID = agentID
+	for name, tool := range r.tools {
+		r.tools[name] = r.wrapTool(tool)
+	}
+}
+
+// RestrictTo removes tools not present in the allowed set.
+func (r *ToolRegistry) RestrictTo(allowed []string) {
+	if len(allowed) == 0 {
+		return
+	}
+	set := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for name := range r.tools {
+		if _, ok := set[name]; !ok {
+			delete(r.tools, name)
+		}
+	}
+}
+
+// wrapTool decorates a tool with the secure wrapper when a permission manager
+// is active so every execution path consistently enforces authorization.
+func (r *ToolRegistry) wrapTool(tool Tool) Tool {
+	if tool == nil {
+		return nil
+	}
+	if existing, ok := tool.(*secureTool); ok {
+		existing.manager = r.permissionManager
+		existing.agentID = r.registeredAgentID
+		return existing
+	}
+	if r.permissionManager == nil {
+		return tool
+	}
+	return &secureTool{
+		Tool:    tool,
+		manager: r.permissionManager,
+		agentID: r.registeredAgentID,
+	}
+}
+
+type secureTool struct {
+	Tool
+	manager *PermissionManager
+	agentID string
+}
+
+// Execute authorizes the wrapped tool before delegating to the original
+// implementation to ensure permission checks happen even for direct callers.
+func (t *secureTool) Execute(ctx context.Context, state *Context, args map[string]interface{}) (*ToolResult, error) {
+	if t.manager != nil {
+		if err := t.manager.AuthorizeTool(ctx, t.agentID, t.Tool, args); err != nil {
+			return nil, err
+		}
+	}
+	return t.Tool.Execute(ctx, state, args)
 }
