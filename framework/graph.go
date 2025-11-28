@@ -68,6 +68,7 @@ func (g *Graph) SetTelemetry(t Telemetry) {
 	g.telemetry = t
 }
 
+// emit sends telemetry events when a sink is configured; a no-op otherwise.
 func (g *Graph) emit(event Event) {
 	g.mu.RLock()
 	telemetry := g.telemetry
@@ -78,6 +79,8 @@ func (g *Graph) emit(event Event) {
 	telemetry.Emit(event)
 }
 
+// extractTaskID fetches the current task identifier from the shared context so
+// telemetry has stable correlation identifiers even across node boundaries.
 func (g *Graph) extractTaskID(state *Context) string {
 	if state == nil {
 		return ""
@@ -527,6 +530,8 @@ func (n *TerminalNode) Execute(ctx context.Context, state *Context) (*Result, er
 	return &Result{NodeID: n.id, Success: true}, nil
 }
 
+// errorFromString reconstructs an error from a stored message, enabling tool
+// results that only record strings to participate in graph error handling.
 func errorFromString(err string) error {
 	if err == "" {
 		return nil
