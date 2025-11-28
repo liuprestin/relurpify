@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	logpkg "log"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
 	"github.com/lexcodex/relurpify/framework"
 	"github.com/lexcodex/relurpify/llm"
 	"github.com/lexcodex/relurpify/server"
@@ -22,26 +25,32 @@ func main() {
 		DisableToolCalling: envBool("DISABLE_LLM_TOOLS"),
 	}
 
-	memory, err := framework.NewHybridMemory(".memory")
+	workspace := envOrDefault("RELURPIFY_WORKSPACE", ".")
+	memory, err := framework.NewHybridMemory(filepath.Join(workspace, ".memory"))
 	if err != nil {
 		logger.Fatalf("memory init failed: %v", err)
 	}
 
 	registry := framework.NewToolRegistry()
-	for _, tool := range tools.FileOperations(".") {
+	for _, tool := range tools.FileOperations(workspace) {
 		if err := registry.Register(tool); err != nil {
 			logger.Fatalf("register tool %s: %v", tool.Name(), err)
 		}
 	}
 	searchTools := []framework.Tool{
-		&tools.GrepTool{BasePath: "."},
-		&tools.SemanticSearchTool{BasePath: "."},
-		&tools.SimilarityTool{BasePath: "."},
+		&tools.GrepTool{BasePath: workspace},
+		&tools.SemanticSearchTool{BasePath: workspace},
+		&tools.SimilarityTool{BasePath: workspace},
 	}
 	for _, tool := range searchTools {
 		if err := registry.Register(tool); err != nil {
 			logger.Fatalf("register tool %s: %v", tool.Name(), err)
 		}
+	}
+
+	manifestPath := envOrDefault("RELURPIFY_MANIFEST", filepath.Join(workspace, "agent.manifest.yaml"))
+	if _, err := cliutils.BootstrapRuntime(context.Background(), workspace, manifestPath, registry); err != nil {
+		logger.Fatalf("security bootstrap failed: %v", err)
 	}
 
 	modelClient := llm.NewClient(cfg.OllamaEndpoint, cfg.Model)
