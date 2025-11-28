@@ -110,6 +110,8 @@ func (s *InMemoryVectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// embed tokenizes text and builds a simple term-frequency vector. The store
+// intentionally keeps the math approachable so teams can swap in a real model.
 func embed(text string) map[string]float64 {
 	vector := make(map[string]float64)
 	for _, token := range strings.Fields(strings.ToLower(text)) {
@@ -118,6 +120,8 @@ func embed(text string) map[string]float64 {
 	return vector
 }
 
+// cosineSimilarity measures the angle between vectors, returning higher scores
+// for documents that share more vocabulary with the query.
 func cosineSimilarity(a, b map[string]float64) float64 {
 	var dot, normA, normB float64
 	for term, weight := range a {
@@ -133,6 +137,8 @@ func cosineSimilarity(a, b map[string]float64) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
+// sortResults orders matches by descending similarity using a simple swap sort
+// (datasets are intentionally tiny for the in-memory implementation).
 func sortResults(results []SearchResult) {
 	for i := 0; i < len(results)-1; i++ {
 		for j := i + 1; j < len(results); j++ {
