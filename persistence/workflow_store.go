@@ -65,6 +65,8 @@ func NewFileWorkflowStore(root string) (*FileWorkflowStore, error) {
 	return store, nil
 }
 
+// load hydrates the in-memory cache from disk when the process starts so
+// workflows survive restarts.
 func (s *FileWorkflowStore) load() error {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -83,6 +85,7 @@ func (s *FileWorkflowStore) load() error {
 	return nil
 }
 
+// persist writes the cached snapshots back to disk after any mutation.
 func (s *FileWorkflowStore) persist() error {
 	var snapshots []WorkflowSnapshot
 	for _, snap := range s.cache {
