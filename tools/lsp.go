@@ -208,6 +208,10 @@ func (t *DefinitionTool) IsAvailable(ctx context.Context, state *framework.Conte
 	return t.Proxy != nil
 }
 
+func (t *DefinitionTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet("", framework.FileSystemRead, framework.FileSystemList)}
+}
+
 // ReferencesTool implements GetReferences tool.
 type ReferencesTool struct {
 	Proxy *Proxy
@@ -255,6 +259,10 @@ func (t *ReferencesTool) Execute(ctx context.Context, state *framework.Context, 
 }
 func (t *ReferencesTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return t.Proxy != nil
+}
+
+func (t *ReferencesTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet("", framework.FileSystemRead, framework.FileSystemList)}
 }
 
 // HoverTool implements GetHover.
@@ -305,6 +313,10 @@ func (t *HoverTool) IsAvailable(ctx context.Context, state *framework.Context) b
 	return t.Proxy != nil
 }
 
+func (t *HoverTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet("", framework.FileSystemRead, framework.FileSystemList)}
+}
+
 // DiagnosticsTool implements diagnostics retrieval.
 type DiagnosticsTool struct {
 	Proxy *Proxy
@@ -339,6 +351,10 @@ func (t *DiagnosticsTool) Execute(ctx context.Context, state *framework.Context,
 }
 func (t *DiagnosticsTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return t.Proxy != nil
+}
+
+func (t *DiagnosticsTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet("", framework.FileSystemRead, framework.FileSystemList)}
 }
 
 // SearchSymbolsTool implements symbol lookup.
@@ -379,6 +395,10 @@ func (t *SearchSymbolsTool) IsAvailable(ctx context.Context, state *framework.Co
 	return t.Proxy != nil
 }
 
+func (t *SearchSymbolsTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet("", framework.FileSystemRead, framework.FileSystemList)}
+}
+
 // DocumentSymbolsTool returns structure of a file.
 type DocumentSymbolsTool struct {
 	Proxy *Proxy
@@ -413,6 +433,10 @@ func (t *DocumentSymbolsTool) Execute(ctx context.Context, state *framework.Cont
 }
 func (t *DocumentSymbolsTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return t.Proxy != nil
+}
+
+func (t *DocumentSymbolsTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet("", framework.FileSystemRead, framework.FileSystemList)}
 }
 
 // FormatTool formats code through the LSP.
@@ -450,6 +474,10 @@ func (t *FormatTool) Execute(ctx context.Context, state *framework.Context, args
 }
 func (t *FormatTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	return t.Proxy != nil
+}
+
+func (t *FormatTool) Permissions() framework.ToolPermissions {
+	return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet("", framework.FileSystemRead, framework.FileSystemWrite)}
 }
 
 func toInt(value interface{}) int {
