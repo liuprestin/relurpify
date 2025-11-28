@@ -12,13 +12,19 @@ type testNode struct {
 	run  func(context.Context, *Context) (*Result, error)
 }
 
+// ID returns the configured node identifier for testing dispatch logic.
 func (n testNode) ID() string { return n.id }
+
+// Type reports the explicit type or defaults to a tool node for the tests.
 func (n testNode) Type() NodeType {
 	if n.kind == "" {
 		return NodeTypeTool
 	}
 	return n.kind
 }
+
+// Execute runs the injected function or returns a successful result when none
+// is provided so the graph tests can focus on traversal mechanics.
 func (n testNode) Execute(ctx context.Context, state *Context) (*Result, error) {
 	if n.run != nil {
 		return n.run(ctx, state)
@@ -26,6 +32,8 @@ func (n testNode) Execute(ctx context.Context, state *Context) (*Result, error) 
 	return &Result{NodeID: n.id, Success: true, Data: map[string]interface{}{}}, nil
 }
 
+// TestGraphExecuteLinear ensures a simple three-node graph runs to completion
+// and returns the terminal node when no branches exist.
 func TestGraphExecuteLinear(t *testing.T) {
 	graph := NewGraph()
 	ctx := NewContext()
@@ -63,6 +71,8 @@ func TestGraphExecuteLinear(t *testing.T) {
 	}
 }
 
+// TestGraphMissingNode confirms AddEdge refuses connections to unknown nodes,
+// preventing runtime panics later in execution.
 func TestGraphMissingNode(t *testing.T) {
 	graph := NewGraph()
 	n1 := testNode{id: "n1"}
@@ -84,6 +94,8 @@ func TestGraphMissingNode(t *testing.T) {
 	}
 }
 
+// TestGraphAllowsCycles verifies the engine can handle loops as long as node
+// visit counts stay under the configured limit.
 func TestGraphAllowsCycles(t *testing.T) {
 	graph := NewGraph()
 	ctx := NewContext()
@@ -136,6 +148,8 @@ func TestGraphAllowsCycles(t *testing.T) {
 	}
 }
 
+// TestGraphMaxNodeVisits ensures runaway cycles trigger a defensive error once
+// a node exceeds its allowed visit count.
 func TestGraphMaxNodeVisits(t *testing.T) {
 	graph := NewGraph()
 	graph.maxNodeVisits = 2
@@ -158,6 +172,8 @@ func TestGraphMaxNodeVisits(t *testing.T) {
 	}
 }
 
+// TestGraphNodeError validates errors returned by a node bubble up to the
+// caller so orchestration layers can surface the failure.
 func TestGraphNodeError(t *testing.T) {
 	graph := NewGraph()
 	errNode := testNode{
