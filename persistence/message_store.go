@@ -35,6 +35,7 @@ func NewFileMessageStore(root string) (*FileMessageStore, error) {
 	return &FileMessageStore{root: root}, nil
 }
 
+// pathFor builds the JSON file path for a workflow's transcript.
 func (s *FileMessageStore) pathFor(id string) string {
 	return filepath.Join(s.root, id+".messages.json")
 }
@@ -90,6 +91,8 @@ func (s *FileMessageStore) Clear(ctx context.Context, workflowID string) error {
 	return os.Remove(s.pathFor(workflowID))
 }
 
+// read loads the persisted conversation for a workflow, tolerating missing
+// files by returning an empty history.
 func (s *FileMessageStore) read(workflowID string) ([]framework.Interaction, error) {
 	path := s.pathFor(workflowID)
 	data, err := os.ReadFile(path)
