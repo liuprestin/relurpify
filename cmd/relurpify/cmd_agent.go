@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lexcodex/relurpify/cmd/internal/cliutils"
+	"github.com/lexcodex/relurpify/cmd/internal/workspacecfg"
 	"github.com/lexcodex/relurpify/framework"
 	"github.com/lexcodex/relurpify/llm"
 	"github.com/lexcodex/relurpify/server"
@@ -25,6 +26,10 @@ func newServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Run the HTTP API server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			workspace, manifestPath, allowedTools, _, err := resolveWorkspaceRuntime(flagWorkspace)
+			if err != nil {
+				return err
+			}
 			cfg := &framework.Config{
 				Model:              flagModel,
 				OllamaEndpoint:     flagEndpoint,
@@ -32,11 +37,19 @@ func newServeCmd() *cobra.Command {
 				MaxIterations:      8,
 				DisableToolCalling: flagDisableTools,
 			}
+			defaultMem := filepath.Join(flagWorkspace, ".memory")
+			if memDir == "" || memDir == defaultMem {
+				memDir = filepath.Join(workspace, ".memory")
+			}
 			memory, err := framework.NewHybridMemory(memDir)
 			if err != nil {
 				return err
 			}
-			registry := cliutils.BuildToolRegistry(flagWorkspace)
+			registry := cliutils.BuildToolRegistry(workspace)
+			workspacecfg.RestrictRegistry(registry, allowedTools)
+			if _, err := cliutils.BootstrapRuntime(cmd.Context(), workspace, manifestPath, registry); err != nil {
+				return err
+			}
 			modelClient := llm.NewClient(cfg.OllamaEndpoint, cfg.Model)
 			agent := server.AgentFactory(modelClient, registry, memory, cfg)
 			api := &server.APIServer{
@@ -64,6 +77,10 @@ func newTaskCmd() *cobra.Command {
 			if instruction == "" {
 				return errors.New("instruction is required")
 			}
+			workspace, manifestPath, allowedTools, _, err := resolveWorkspaceRuntime(flagWorkspace)
+			if err != nil {
+				return err
+			}
 			cfg := &framework.Config{
 				Model:              flagModel,
 				OllamaEndpoint:     flagEndpoint,
@@ -71,11 +88,15 @@ func newTaskCmd() *cobra.Command {
 				MaxIterations:      8,
 				DisableToolCalling: flagDisableTools,
 			}
-			memory, err := framework.NewHybridMemory(filepath.Join(flagWorkspace, ".memory"))
+			memory, err := framework.NewHybridMemory(filepath.Join(workspace, ".memory"))
 			if err != nil {
 				return err
 			}
-			registry := cliutils.BuildToolRegistry(flagWorkspace)
+			registry := cliutils.BuildToolRegistry(workspace)
+			workspacecfg.RestrictRegistry(registry, allowedTools)
+			if _, err := cliutils.BootstrapRuntime(cmd.Context(), workspace, manifestPath, registry); err != nil {
+				return err
+			}
 			modelClient := llm.NewClient(cfg.OllamaEndpoint, cfg.Model)
 			agent := server.AgentFactory(modelClient, registry, memory, cfg)
 
@@ -116,4 +137,24 @@ func newTaskCmd() *cobra.Command {
 	cmd.Flags().StringVar(&taskType, "type", string(framework.TaskTypeCodeModification), "Task type")
 	cmd.Flags().StringVar(&contextPath, "context", "", "Optional JSON file with additional context")
 	return cmd
+}
+
+func resolveWorkspaceRuntime(base string) (string, string, []string, *workspacecfg.WorkspaceConfig, error) {
+	cfg, err := workspacecfg.Load(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return base, filepath.Join(base, "agent.manifest.yaml"), nil, nil, nil
+		}
+		return "", "", nil, nil, err
+	}
+	root := cfg.Workspace
+	if root == "" {
+		root = base
+	}
+	manifest := filepath.Join(root, "agent.manifest.yaml")
+	if path, ok := cfg.ManifestForAgent(cfg.DefaultAgent); ok && path != "" {
+		manifest = path
+	}
+	allowed := append([]string(nil), cfg.AllowedTools...)
+	return root, manifest, allowed, cfg, nil
 }
