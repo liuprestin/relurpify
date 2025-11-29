@@ -1,0 +1,24 @@
+relurpish 2025/11/29 13:24:01.375828 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:24:36.527774 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:25:31.688759 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:29:04.770573 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:30:05.842870 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:33:03.011895 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:34:10.651891 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:38:05.949827 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:38:43.871154 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:50:28.867151 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:56:14.050021 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
+relurpish 2025/11/29 13:58:02.047975 permission manager unavailable: sandbox verification failed: runsc platform mismatch: expected kvm got runsc version release-20251103.0
+spec: 1.1.0-rc.1
