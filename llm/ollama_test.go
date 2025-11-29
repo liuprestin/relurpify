@@ -87,7 +87,7 @@ func TestClientChat(t *testing.T) {
 	assert.Equal(t, "ok", resp.Text)
 }
 
-func TestClientGenerateWithToolsParsesToolCalls(t *testing.T) {
+func TestClientChatWithToolsParsesToolCalls(t *testing.T) {
 	client := NewClient("http://fake", "model")
 	client.client = &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) *http.Response {
@@ -112,7 +112,10 @@ func TestClientGenerateWithToolsParsesToolCalls(t *testing.T) {
 	}
 
 	tools := []framework.Tool{stubTool{name: "echo"}}
-	resp, err := client.GenerateWithTools(context.Background(), "say hi", tools, &framework.LLMOptions{})
+	messages := []framework.Message{
+		{Role: "user", Content: "say hi"},
+	}
+	resp, err := client.ChatWithTools(context.Background(), messages, tools, &framework.LLMOptions{})
 	assert.NoError(t, err)
 	if assert.Len(t, resp.ToolCalls, 1) {
 		assert.Equal(t, "echo", resp.ToolCalls[0].Name)
