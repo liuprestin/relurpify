@@ -377,10 +377,11 @@ type LLMResponse struct {
 
 // Message is used for chat-like interactions.
 type Message struct {
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-	Name       string `json:"name,omitempty"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Name       string     `json:"name,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // LanguageModel provides the required LLM capabilities.
@@ -388,7 +389,7 @@ type LanguageModel interface {
 	Generate(ctx context.Context, prompt string, options *LLMOptions) (*LLMResponse, error)
 	GenerateStream(ctx context.Context, prompt string, options *LLMOptions) (<-chan string, error)
 	Chat(ctx context.Context, messages []Message, options *LLMOptions) (*LLMResponse, error)
-	GenerateWithTools(ctx context.Context, prompt string, tools []Tool, options *LLMOptions) (*LLMResponse, error)
+	ChatWithTools(ctx context.Context, messages []Message, tools []Tool, options *LLMOptions) (*LLMResponse, error)
 }
 
 // LLMNode represents an LLM call. It is a thin wrapper around a LanguageModel
