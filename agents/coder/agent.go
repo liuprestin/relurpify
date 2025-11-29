@@ -2,6 +2,7 @@ package coder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -203,5 +204,5 @@ func toolErr(err string) error {
 	if err == "" {
 		return nil
 	}
-	return fmt.Errorf(err)
+	return errors.New(err)
 }
