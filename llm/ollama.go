@@ -129,18 +129,13 @@ func (c *Client) Chat(ctx context.Context, messages []framework.Message, options
 	return c.doRequest(ctx, "/api/chat", payload)
 }
 
-// GenerateWithTools handles tool calling metadata.
-func (c *Client) GenerateWithTools(ctx context.Context, prompt string, tools []framework.Tool, options *framework.LLMOptions) (*framework.LLMResponse, error) {
+// ChatWithTools handles tool calling metadata.
+func (c *Client) ChatWithTools(ctx context.Context, messages []framework.Message, tools []framework.Tool, options *framework.LLMOptions) (*framework.LLMResponse, error) {
 	payload := map[string]interface{}{
-		"model":  c.model(options),
-		"tools":  convertTools(tools),
-		"stream": false,
-		"messages": []map[string]interface{}{
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
+		"model":    c.model(options),
+		"tools":    convertTools(tools),
+		"stream":   false,
+		"messages": convertMessages(messages),
 	}
 	c.applyOptions(payload, options)
 	return c.doRequest(ctx, "/api/chat", payload)
@@ -217,9 +212,34 @@ func convertMessages(messages []framework.Message) []map[string]interface{} {
 		}
 		if msg.Name != "" {
 			m["name"] = msg.Name
+			if msg.Role == "tool" {
+				m["tool_name"] = msg.Name
+			}
 		}
 		if msg.ToolCallID != "" {
 			m["tool_call_id"] = msg.ToolCallID
+		}
+		if len(msg.ToolCalls) > 0 {
+			calls := make([]map[string]interface{}, 0, len(msg.ToolCalls))
+			for _, call := range msg.ToolCalls {
+				fn := map[string]interface{}{
+					"name": call.Name,
+				}
+				if len(call.Args) > 0 {
+					fn["arguments"] = call.Args
+				} else {
+					fn["arguments"] = map[string]interface{}{}
+				}
+				entry := map[string]interface{}{
+					"type":     "function",
+					"function": fn,
+				}
+				if call.ID != "" {
+					entry["id"] = call.ID
+				}
+				calls = append(calls, entry)
+			}
+			m["tool_calls"] = calls
 		}
 		out = append(out, m)
 	}
