@@ -64,7 +64,7 @@ go test ./...
 
 ```bash
 export OLLAMA_ENDPOINT=http://localhost:11434
-export OLLAMA_MODEL=codellama
+export OLLAMA_MODEL=deepseek-r1:7b
 
 go run ./cmd/server
 ```
@@ -117,4 +117,3 @@ The [`server/lsp_server.go`](server/lsp_server.go) package adapts the framework 
 3. The configured agent (default: coding agent with reflection) builds a graph, invokes tools/LLMs, and streams edits back.
 
 Use `go run ./cmd/coder apply --file path --instruction "..."` for a Cursor-like CLI workflow that mirrors the LSP commands when you do not have an editor integration handy.
-
