@@ -31,7 +31,7 @@ func (s *stubLLM) Chat(ctx context.Context, messages []framework.Message, option
 	return nil, errors.New("not implemented")
 }
 
-func (s *stubLLM) GenerateWithTools(ctx context.Context, prompt string, tools []framework.Tool, options *framework.LLMOptions) (*framework.LLMResponse, error) {
+func (s *stubLLM) ChatWithTools(ctx context.Context, messages []framework.Message, tools []framework.Tool, options *framework.LLMOptions) (*framework.LLMResponse, error) {
 	s.withToolsCalls++
 	return s.nextResponse()
 }
@@ -202,8 +202,23 @@ func TestReActAgentToolCalling(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "done", result.NodeID)
+	assert.Equal(t, 1, llm.withToolsCalls)
 
 	lastToolRes, ok := state.Get("react.last_tool_result")
 	assert.True(t, ok)
 	assert.Contains(t, fmt.Sprint(lastToolRes.(map[string]interface{})["echo"]), "hi")
+
+	messagesVal, ok := state.Get("react.messages")
+	assert.True(t, ok)
+	messages, ok := messagesVal.([]framework.Message)
+	assert.True(t, ok)
+	var toolMessages int
+	for _, msg := range messages {
+		if msg.Role == "tool" {
+			toolMessages++
+			assert.Equal(t, "echo", msg.Name)
+			assert.Contains(t, msg.Content, "success")
+		}
+	}
+	assert.Equal(t, 1, toolMessages)
 }
