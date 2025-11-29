@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -32,17 +33,41 @@ type TaskResponse struct {
 
 // Serve starts listening on the provided address.
 func (s *APIServer) Serve(addr string) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/task", s.handleTask)
-	mux.HandleFunc("/api/context", s.handleContext)
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
+	return s.ServeContext(context.Background(), addr)
+}
+
+// ServeContext allows the caller to control shutdown via context cancellation.
+func (s *APIServer) ServeContext(ctx context.Context, addr string) error {
+	server := s.newHTTPServer(addr)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
 	if s.Logger != nil {
 		s.Logger.Printf("API listening on %s", addr)
 	}
-	return server.ListenAndServe()
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+		return ctx.Err()
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+}
+
+func (s *APIServer) newHTTPServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/task", s.handleTask)
+	mux.HandleFunc("/api/context", s.handleContext)
+	return &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
 }
 
 func (s *APIServer) handleTask(w http.ResponseWriter, r *http.Request) {
