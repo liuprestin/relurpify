@@ -3,6 +3,7 @@ package react
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -117,18 +118,27 @@ func (n *reactThinkNode) Type() framework.NodeType { return framework.NodeTypeOb
 
 func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("planning")
-	prompt := n.buildPrompt(state)
 	var resp *framework.LLMResponse
 	var err error
 	tools := n.agent.Tools.All()
 	useToolCalling := len(tools) > 0 && (n.agent.Config == nil || !n.agent.Config.DisableToolCalling)
 	if useToolCalling {
-		resp, err = n.agent.Model.GenerateWithTools(ctx, prompt, tools, &framework.LLMOptions{
+		messages := n.ensureMessages(state, tools)
+		resp, err = n.agent.Model.ChatWithTools(ctx, messages, tools, &framework.LLMOptions{
 			Model:       n.agent.Config.Model,
 			Temperature: 0.1,
 			MaxTokens:   512,
 		})
+		if err == nil {
+			messages = append(messages, framework.Message{
+				Role:      "assistant",
+				Content:   resp.Text,
+				ToolCalls: resp.ToolCalls,
+			})
+			saveReactMessages(state, messages)
+		}
 	} else {
+		prompt := n.buildPrompt(state)
 		resp, err = n.agent.Model.Generate(ctx, prompt, &framework.LLMOptions{
 			Model:       n.agent.Config.Model,
 			Temperature: 0.1,
@@ -148,6 +158,9 @@ func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) 
 			Complete:  false,
 		}
 		state.Set("react.tool_calls", resp.ToolCalls)
+	} else if useToolCalling {
+		decision = decisionPayload{Thought: resp.Text, Complete: true}
+		state.Set("react.tool_calls", []framework.ToolCall{})
 	} else {
 		parsed, err := parseDecision(resp.Text)
 		if err != nil {
@@ -184,6 +197,32 @@ Available tools:
 Recent tool results: %s`, n.task.Instruction, strings.Join(tools, "\n"), last)
 }
 
+func (n *reactThinkNode) ensureMessages(state *framework.Context, tools []framework.Tool) []framework.Message {
+	messages := getReactMessages(state)
+	if len(messages) > 0 {
+		return messages
+	}
+	systemPrompt := n.buildSystemPrompt(tools)
+	userPrompt := fmt.Sprintf("Task: %s", n.task.Instruction)
+	messages = []framework.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+	saveReactMessages(state, messages)
+	return messages
+}
+
+func (n *reactThinkNode) buildSystemPrompt(tools []framework.Tool) string {
+	var lines []string
+	for _, tool := range tools {
+		lines = append(lines, fmt.Sprintf("- %s: %s", tool.Name(), tool.Description()))
+	}
+	return fmt.Sprintf(`You are a ReAct agent. Think carefully, call tools when required, and finish with a concise summary.
+Available tools:
+%s
+When you call a tool, wait for its response before continuing. When the work is complete, provide the final answer as plain text.`, strings.Join(lines, "\n"))
+}
+
 type reactActNode struct {
 	id    string
 	agent *ReActAgent
@@ -208,6 +247,7 @@ func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*
 				}
 				if res != nil {
 					results[call.Name] = res.Data
+					appendToolMessage(state, call, res)
 				}
 			}
 			state.Set("react.last_tool_result", results)
@@ -325,5 +365,62 @@ func parseError(err string) error {
 	if err == "" {
 		return nil
 	}
-	return fmt.Errorf(err)
+	return errors.New(err)
+}
+
+const reactMessagesKey = "react.messages"
+
+func getReactMessages(state *framework.Context) []framework.Message {
+	raw, ok := state.Get(reactMessagesKey)
+	if !ok {
+		return nil
+	}
+	messages, ok := raw.([]framework.Message)
+	if !ok || len(messages) == 0 {
+		return nil
+	}
+	copyMessages := make([]framework.Message, len(messages))
+	copy(copyMessages, messages)
+	return copyMessages
+}
+
+func saveReactMessages(state *framework.Context, messages []framework.Message) {
+	if len(messages) == 0 {
+		state.Set(reactMessagesKey, []framework.Message{})
+		return
+	}
+	copyMessages := make([]framework.Message, len(messages))
+	copy(copyMessages, messages)
+	state.Set(reactMessagesKey, copyMessages)
+}
+
+func appendToolMessage(state *framework.Context, call framework.ToolCall, res *framework.ToolResult) {
+	messages := getReactMessages(state)
+	if len(messages) == 0 || res == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"success": res.Success,
+	}
+	if len(res.Data) > 0 {
+		payload["data"] = res.Data
+	}
+	if res.Error != "" {
+		payload["error"] = res.Error
+	}
+	if len(res.Metadata) > 0 {
+		payload["metadata"] = res.Metadata
+	}
+	encoded, err := json.Marshal(payload)
+	content := string(encoded)
+	if err != nil {
+		content = fmt.Sprintf("success=%t data=%v error=%s", res.Success, res.Data, res.Error)
+	}
+	messages = append(messages, framework.Message{
+		Role:       "tool",
+		Name:       call.Name,
+		Content:    content,
+		ToolCallID: call.ID,
+	})
+	saveReactMessages(state, messages)
 }
