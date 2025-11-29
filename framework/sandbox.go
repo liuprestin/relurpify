@@ -123,8 +123,9 @@ func (g *GVisorRuntime) checkRunsc(ctx context.Context) error {
 		return errors.New("invalid runsc output")
 	}
 	if g.config.Platform != "" && !strings.Contains(strings.ToLower(g.version), g.config.Platform) {
-		// Not fatal but logable; we treat mismatch as error to fail fast per requirements.
-		return fmt.Errorf("runsc platform mismatch: expected %s got %s", g.config.Platform, g.version)
+		// Platform hint mismatch is logged via version string but no longer fatal so
+		// installations that omit the platform label continue to work.
+		g.version = fmt.Sprintf("%s (platform hint %s not found)", g.version, g.config.Platform)
 	}
 	return nil
 }
