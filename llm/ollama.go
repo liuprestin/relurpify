@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type Client struct {
 	Endpoint string
 	Model    string
 	client   *http.Client
+	Debug    bool
 }
 
 type toolFunction struct {
@@ -141,6 +143,11 @@ func (c *Client) ChatWithTools(ctx context.Context, messages []framework.Message
 	return c.doRequest(ctx, "/api/chat", payload)
 }
 
+// SetDebugLogging enables or disables verbose logging for requests/responses.
+func (c *Client) SetDebugLogging(enabled bool) {
+	c.Debug = enabled
+}
+
 func (c *Client) getHTTPClient() *http.Client {
 	if c.client != nil {
 		return c.client
@@ -182,6 +189,7 @@ func (c *Client) doRequest(ctx context.Context, path string, payload interface{}
 	if err != nil {
 		return nil, err
 	}
+	c.logPayload(path, body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -200,7 +208,12 @@ func (c *Client) doRequest(ctx context.Context, path string, payload interface{}
 		}
 		return nil, fmt.Errorf("ollama error: %s", resp.Status)
 	}
-	return decodeLLMResponse(resp.Body)
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+}
+	c.logResponse(path, responseBody)
+	return decodeLLMResponse(bytes.NewReader(responseBody))
 }
 
 func convertMessages(messages []framework.Message) []map[string]interface{} {
@@ -367,4 +380,32 @@ func normalizeUsage(raw ollamaResponse) map[string]int {
 		return nil
 	}
 	return usage
+}
+
+func (c *Client) logPayload(path string, payload []byte) {
+	if !c.Debug {
+		return
+	}
+	c.logf("request %s payload: %s", path, truncate(string(payload), 2048))
+}
+
+func (c *Client) logResponse(path string, resp []byte) {
+	if !c.Debug {
+		return
+	}
+	c.logf("response %s payload: %s", path, truncate(string(resp), 2048))
+}
+
+func (c *Client) logf(format string, args ...interface{}) {
+	if !c.Debug {
+		return
+	}
+	log.Printf("[ollama] "+format, args...)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
 }
