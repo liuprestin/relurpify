@@ -4,6 +4,8 @@
 .relurpify
 testdata
 docs
-/relurpify
+relurpify
 relurpish
 .relurpish
+relurpify_config
+coding-agent
