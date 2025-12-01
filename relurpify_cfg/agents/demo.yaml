@@ -1,0 +1,100 @@
+apiVersion: relurpify/v1alpha1
+kind: AgentManifest
+metadata:
+    name: demo
+    version: 1.0.0
+    description: Custom agent
+spec:
+    image: ghcr.io/relurpify/runtime:latest
+    runtime: gvisor
+    permissions:
+        filesystem:
+            - action: fs:read
+              path: /home/lex/Public/Relurpify/**
+              justification: Read workspace
+            - action: fs:list
+              path: /home/lex/Public/Relurpify/**
+              justification: List workspace
+            - action: fs:write
+              path: /home/lex/Public/Relurpify/**
+              justification: Modify workspace
+        executables:
+            - binary: bash
+              args:
+                - -c
+            - binary: go
+              args:
+                - '*'
+        network:
+            - direction: egress
+              protocol: tcp
+              host: localhost
+              port: 11434
+              description: Ollama
+    resources:
+        limits:
+            cpu: "2"
+            memory: 4Gi
+            disk_io: 500MBps
+    security:
+        run_as_user: 1000
+        read_only_root: false
+        no_new_privileges: true
+    audit:
+        level: verbose
+        retention_days: 7
+    agent:
+        mode: primary
+        version: 1.0.0
+        prompt: You are Demo. Follow project rules, ask before destructive actions, and summarize each change.
+        model:
+            provider: ollama
+            name: qwen2.5-coder:14b
+            temperature: 0.2
+            max_tokens: 4096
+        ollama_tool_calling: true
+        tools:
+            file_read: true
+            file_write: true
+            file_edit: true
+            bash_execute: true
+            lsp_query: true
+            search_codebase: true
+            web_search: false
+        bash_permissions:
+            allow_patterns:
+                - git diff*
+                - git status
+            deny_patterns:
+                - rm -rf*
+                - sudo*
+            default: ask
+        file_permissions:
+            write:
+                allow_patterns:
+                    - '**/*.go'
+                    - docs/**/*.md
+                deny_patterns: []
+                default: ask
+                require_approval: false
+                documentation_only: false
+            edit:
+                allow_patterns: []
+                deny_patterns: []
+                default: ask
+                require_approval: true
+                documentation_only: false
+        invocation:
+            can_invoke_subagents: true
+            allowed_subagents: []
+            max_depth: 2
+        context:
+            max_files: 20
+            max_tokens: 20000
+            include_git_history: false
+            include_dependencies: true
+        metadata:
+            author: lex
+            tags:
+                - generated
+            priority: 5
