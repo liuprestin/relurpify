@@ -90,7 +90,7 @@ func (r *AgentRegistration) Execute(ctx context.Context, agent Agent, task *Task
 	if r == nil || r.Permissions == nil {
 		return nil, errors.New("permission subsystem missing")
 	}
-	if err := agent.Initialize(&Config{Name: r.ID}); err != nil {
+	if err := agent.Initialize(&Config{Name: r.ID, OllamaToolCalling: true}); err != nil {
 		return nil, err
 	}
 	return agent.Execute(ctx, task, state)
