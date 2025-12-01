@@ -256,40 +256,23 @@ func (b *ContextBuilder) Build(ctx context.Context, uri string) (map[string]inte
 
 // AgentFactory builds default agent stack for the server.
 func AgentFactory(model framework.LanguageModel, toolsRegistry *framework.ToolRegistry, mem framework.MemoryStore, cfg *framework.Config) framework.Agent {
-	var delegate framework.Agent
-	if cfg != nil && cfg.DisableToolCalling {
-		manual := &agents.ManualCodingAgent{
-			Model:  model,
-			Tools:  toolsRegistry,
-			Config: cfg,
-		}
-		_ = manual.Initialize(cfg)
-		reflection := &agents.ReflectionAgent{
-			Reviewer: model,
-			Delegate: manual,
-		}
-		_ = reflection.Initialize(cfg)
-		return reflection
-	} else {
-		expert := &agents.ExpertCoderAgent{
-			Model:  model,
-			Tools:  toolsRegistry,
-			Memory: mem,
-		}
-		if err := expert.Initialize(cfg); err == nil {
-			return expert
-		}
-		coding := &agents.CodingAgent{
-			Model:  model,
-			Tools:  toolsRegistry,
-			Memory: mem,
-		}
-		_ = coding.Initialize(cfg)
-		delegate = coding
+	expert := &agents.ExpertCoderAgent{
+		Model:  model,
+		Tools:  toolsRegistry,
+		Memory: mem,
 	}
+	if err := expert.Initialize(cfg); err == nil {
+		return expert
+	}
+	coding := &agents.CodingAgent{
+		Model:  model,
+		Tools:  toolsRegistry,
+		Memory: mem,
+	}
+	_ = coding.Initialize(cfg)
 	reflection := &agents.ReflectionAgent{
 		Reviewer: model,
-		Delegate: delegate,
+		Delegate: coding,
 	}
 	_ = reflection.Initialize(cfg)
 	return reflection
