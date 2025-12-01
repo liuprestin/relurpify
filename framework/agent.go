@@ -70,7 +70,9 @@ type Config struct {
 	Model              string
 	OllamaEndpoint     string
 	LanguageServers    map[string]map[string]string
-	DisableToolCalling bool
+	OllamaToolCalling  bool
+	DebugLLM           bool
+	DebugAgent         bool
 }
 
 // Result captures the result of a graph or agent execution. Creating a shared
