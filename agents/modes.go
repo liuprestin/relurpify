@@ -10,7 +10,6 @@ const (
 	ModeArchitect  Mode = "architect"
 	ModeAsk        Mode = "ask"
 	ModeDebug      Mode = "debug"
-	ModeSecurity   Mode = "security"
 	ModeDocument   Mode = "docs"
 	defaultMode        = ModeCode
 )
@@ -35,6 +34,8 @@ type ModeProfile struct {
 	Restrictions []string
 }
 
+// defaultModeProfiles returns the baked-in description for every agent mode so
+// the CLI can operate even before user manifests override the settings.
 func defaultModeProfiles() map[Mode]ModeProfile {
 	return map[Mode]ModeProfile{
 		ModeCode: {
@@ -104,25 +105,6 @@ func defaultModeProfiles() map[Mode]ModeProfile {
 				AllowWrite:   true,
 				AllowExecute: true,
 				AllowNetwork: false,
-			},
-		},
-		ModeSecurity: {
-			Name:        ModeSecurity,
-			Title:       "Security Audit Mode",
-			Description: "Static analysis and dependency reviews with read-only tools.",
-			Temperature: 0.0,
-			Capabilities: []framework.Capability{
-				framework.CapabilityReview,
-				framework.CapabilityExplain,
-			},
-			ToolScope: ToolScope{
-				AllowRead:    true,
-				AllowWrite:   false,
-				AllowExecute: false,
-				AllowNetwork: false,
-			},
-			Restrictions: []string{
-				"Agent cannot modify files while auditing.",
 			},
 		},
 		ModeDocument: {
