@@ -89,9 +89,16 @@ type reflectionDelegateNode struct {
 	task  *framework.Task
 }
 
-func (n *reflectionDelegateNode) ID() string               { return n.id }
-func (n *reflectionDelegateNode) Type() framework.NodeType { return framework.NodeTypeSystem }
+// ID returns the graph identifier for the delegate execution step.
+func (n *reflectionDelegateNode) ID() string { return n.id }
 
+// Type indicates this node executes system steps rather than tools.
+func (n *reflectionDelegateNode) Type() framework.NodeType {
+	return framework.NodeTypeSystem
+}
+
+// Execute runs the delegate agent while isolating state mutations until the
+// child run succeeds.
 func (n *reflectionDelegateNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("executing")
 	child := state.Clone()
@@ -110,9 +117,16 @@ type reflectionReviewNode struct {
 	task  *framework.Task
 }
 
-func (n *reflectionReviewNode) ID() string               { return n.id }
-func (n *reflectionReviewNode) Type() framework.NodeType { return framework.NodeTypeObservation }
+// ID returns the review node identifier.
+func (n *reflectionReviewNode) ID() string { return n.id }
 
+// Type marks the node as an observation step since it inspects output.
+func (n *reflectionReviewNode) Type() framework.NodeType {
+	return framework.NodeTypeObservation
+}
+
+// Execute asks the reviewer model to evaluate the last result and captures the
+// structured feedback in the shared state.
 func (n *reflectionReviewNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	resultVal, _ := state.Get("reflection.last_result")
 	lastResult, _ := resultVal.(*framework.Result)
@@ -141,9 +155,16 @@ type reflectionDecisionNode struct {
 	agent *ReflectionAgent
 }
 
-func (n *reflectionDecisionNode) ID() string               { return n.id }
-func (n *reflectionDecisionNode) Type() framework.NodeType { return framework.NodeTypeConditional }
+// ID returns the decision node identifier.
+func (n *reflectionDecisionNode) ID() string { return n.id }
 
+// Type declares the node as a conditional branch in the graph.
+func (n *reflectionDecisionNode) Type() framework.NodeType {
+	return framework.NodeTypeConditional
+}
+
+// Execute inspects review feedback and decides if another delegate iteration
+// should run.
 func (n *reflectionDecisionNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	reviewVal, _ := state.Get("reflection.review")
 	review, _ := reviewVal.(reviewPayload)
@@ -165,6 +186,7 @@ type reviewPayload struct {
 	Approve bool `json:"approve"`
 }
 
+// parseReview decodes the reviewer JSON into a strongly typed payload.
 func parseReview(raw string) (reviewPayload, error) {
 	var payload reviewPayload
 	if err := json.Unmarshal([]byte(ExtractJSON(raw)), &payload); err != nil {
