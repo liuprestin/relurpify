@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// newConfigCmd registers subcommands that inspect or mutate config.yaml.
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
@@ -15,6 +16,7 @@ func newConfigCmd() *cobra.Command {
 	return cmd
 }
 
+// newConfigGetCmd prints the value referenced by a dotted key.
 func newConfigGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get [key]",
@@ -35,6 +37,7 @@ func newConfigGetCmd() *cobra.Command {
 	}
 }
 
+// newConfigSetCmd updates a dotted key with the provided value.
 func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set [key] [value]",
