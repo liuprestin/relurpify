@@ -21,6 +21,7 @@ type sessionSnapshot struct {
 	SavedAt   time.Time `yaml:"saved_at"`
 }
 
+// newSessionCmd encapsulates the CRUD commands for session snapshots.
 func newSessionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "session",
@@ -30,6 +31,7 @@ func newSessionCmd() *cobra.Command {
 	return cmd
 }
 
+// newSessionSaveCmd writes the workspace/mode metadata to relurpify_cfg.
 func newSessionSaveCmd() *cobra.Command {
 	var name string
 	var agent string
@@ -77,6 +79,7 @@ func newSessionSaveCmd() *cobra.Command {
 	return cmd
 }
 
+// newSessionLoadCmd prints a single saved snapshot.
 func newSessionLoadCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "load [name]",
@@ -99,6 +102,7 @@ func newSessionLoadCmd() *cobra.Command {
 	}
 }
 
+// newSessionListCmd enumerates snapshots sorted by most recent first.
 func newSessionListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
