@@ -85,7 +85,10 @@ type plannerPlanNode struct {
 	task  *framework.Task
 }
 
-func (n *plannerPlanNode) ID() string               { return n.id }
+// ID returns the stable graph identifier.
+func (n *plannerPlanNode) ID() string { return n.id }
+
+// Type labels the node as a system step for graph visualization.
 func (n *plannerPlanNode) Type() framework.NodeType { return framework.NodeTypeSystem }
 
 // Execute prompts the LLM for a machine-readable plan. The JSON schema is small
@@ -124,7 +127,10 @@ type plannerExecuteNode struct {
 	agent *PlannerAgent
 }
 
-func (n *plannerExecuteNode) ID() string               { return n.id }
+// ID returns the identifier seen by the framework.
+func (n *plannerExecuteNode) ID() string { return n.id }
+
+// Type signals to the graph visualizer that this step consumes tools.
 func (n *plannerExecuteNode) Type() framework.NodeType { return framework.NodeTypeTool }
 
 // Execute iterates the generated plan and calls the requested tool for each
@@ -166,7 +172,10 @@ type plannerVerifyNode struct {
 	task  *framework.Task
 }
 
-func (n *plannerVerifyNode) ID() string               { return n.id }
+// ID returns the verifying node identifier.
+func (n *plannerVerifyNode) ID() string { return n.id }
+
+// Type marks this node as an observation/validation phase.
 func (n *plannerVerifyNode) Type() framework.NodeType { return framework.NodeTypeObservation }
 
 // Execute packages the observed tool outputs into a short summary so downstream
