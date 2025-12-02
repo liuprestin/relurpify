@@ -18,24 +18,29 @@ type stubLLM struct {
 	withToolsCalls int
 }
 
+// Generate returns the next queued LLM response for deterministic tests.
 func (s *stubLLM) Generate(ctx context.Context, prompt string, options *framework.LLMOptions) (*framework.LLMResponse, error) {
 	s.generateCalls++
 	return s.nextResponse()
 }
 
+// GenerateStream is unused in tests.
 func (s *stubLLM) GenerateStream(ctx context.Context, prompt string, options *framework.LLMOptions) (<-chan string, error) {
 	return nil, errors.New("not implemented")
 }
 
+// Chat is unused in tests.
 func (s *stubLLM) Chat(ctx context.Context, messages []framework.Message, options *framework.LLMOptions) (*framework.LLMResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
+// ChatWithTools returns the next queued response and increments instrumentation.
 func (s *stubLLM) ChatWithTools(ctx context.Context, messages []framework.Message, tools []framework.Tool, options *framework.LLMOptions) (*framework.LLMResponse, error) {
 	s.withToolsCalls++
 	return s.nextResponse()
 }
 
+// nextResponse pops the next canned response or returns an error when empty.
 func (s *stubLLM) nextResponse() (*framework.LLMResponse, error) {
 	if s.idx >= len(s.responses) {
 		return nil, errors.New("no response")
@@ -49,14 +54,23 @@ type stubTool struct {
 	name string
 }
 
-func (t stubTool) Name() string        { return t.name }
+// Name returns the tool identifier used in tool calls.
+func (t stubTool) Name() string { return t.name }
+
+// Description provides a friendly label for CLI output.
 func (t stubTool) Description() string { return "stub tool" }
-func (t stubTool) Category() string    { return "test" }
+
+// Category groups the tool in mock registries.
+func (t stubTool) Category() string { return "test" }
+
+// Parameters exposes the single optional argument accepted by the stub.
 func (t stubTool) Parameters() []framework.ToolParameter {
 	return []framework.ToolParameter{
 		{Name: "value", Type: "string", Required: false},
 	}
 }
+
+// Execute echoes the provided "value" argument to simulate tool output.
 func (t stubTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	return &framework.ToolResult{
 		Success: true,
@@ -65,7 +79,11 @@ func (t stubTool) Execute(ctx context.Context, state *framework.Context, args ma
 		},
 	}, nil
 }
+
+// IsAvailable always returns true for simplicity.
 func (t stubTool) IsAvailable(ctx context.Context, state *framework.Context) bool { return true }
+
+// Permissions returns a read-only filesystem grant.
 func (t stubTool) Permissions() framework.ToolPermissions {
 	return framework.ToolPermissions{Permissions: &framework.PermissionSet{
 		FileSystem: []framework.FileSystemPermission{
@@ -74,6 +92,7 @@ func (t stubTool) Permissions() framework.ToolPermissions {
 	}}
 }
 
+// TestReActAgentExecute validates a minimal think-act-observe pass.
 func TestReActAgentExecute(t *testing.T) {
 	llm := &stubLLM{
 		responses: []*framework.LLMResponse{
@@ -121,6 +140,7 @@ func TestReActAgentExecute(t *testing.T) {
 	assert.Equal(t, 0, llm.generateCalls)
 }
 
+// TestReActAgentToolCallingDisabled ensures the agent falls back to plain text.
 func TestReActAgentToolCallingDisabled(t *testing.T) {
 	llm := &stubLLM{
 		responses: []*framework.LLMResponse{
@@ -163,6 +183,7 @@ func TestReActAgentToolCallingDisabled(t *testing.T) {
 	assert.Equal(t, 1, llm.generateCalls)
 }
 
+// TestReActAgentToolCalling verifies tool call handling and transcript storage.
 func TestReActAgentToolCalling(t *testing.T) {
 	llm := &stubLLM{
 		responses: []*framework.LLMResponse{
