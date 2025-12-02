@@ -1,10 +1,8 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -15,6 +13,7 @@ import (
 type GitCommandTool struct {
 	RepoPath string
 	Command  string
+	Runner   framework.CommandRunner
 }
 
 func (t *GitCommandTool) Name() string { return "git_" + t.Command }
@@ -105,31 +104,36 @@ func (t *GitCommandTool) Execute(ctx context.Context, state *framework.Context, 
 }
 
 func (t *GitCommandTool) runGit(ctx context.Context, args []string) (*framework.ToolResult, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = t.RepoPath
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	if t.Runner == nil {
+		return nil, fmt.Errorf("command runner missing for git tool")
+	}
+	stdout, stderr, err := t.Runner.Run(ctx, framework.CommandRequest{
+		Workdir: t.RepoPath,
+		Args:    append([]string{"git"}, args...),
+		Timeout: 30 * time.Second,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("git %s failed: %s", strings.Join(args, " "), stderr.String())
+		return nil, fmt.Errorf("git %s failed: %s", strings.Join(args, " "), stderr)
 	}
 	return &framework.ToolResult{
 		Success: true,
 		Data: map[string]interface{}{
-			"output": stdout.String(),
+			"output": stdout,
 			"time":   time.Now().UTC(),
 		},
 	}, nil
 }
 
 func (t *GitCommandTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--is-inside-work-tree")
-	cmd.Dir = t.RepoPath
-	if err := cmd.Run(); err != nil {
+	if t.Runner == nil {
 		return false
 	}
-	return true
+	_, _, err := t.Runner.Run(ctx, framework.CommandRequest{
+		Workdir: t.RepoPath,
+		Args:    []string{"git", "rev-parse", "--is-inside-work-tree"},
+		Timeout: 5 * time.Second,
+	})
+	return err == nil
 }
 
 func (t *GitCommandTool) Permissions() framework.ToolPermissions {
