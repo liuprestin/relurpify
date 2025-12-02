@@ -13,6 +13,7 @@ import (
 	"github.com/lexcodex/relurpify/framework"
 )
 
+// newAgentsCmd wires the `agents` command group.
 func newAgentsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "agents",
@@ -22,6 +23,7 @@ func newAgentsCmd() *cobra.Command {
 	return cmd
 }
 
+// newAgentsListCmd lists manifests in the configured registry.
 func newAgentsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
@@ -47,6 +49,7 @@ func newAgentsListCmd() *cobra.Command {
 	}
 }
 
+// newAgentsCreateCmd scaffolds a manifest using the CLI flags.
 func newAgentsCreateCmd() *cobra.Command {
 	var name string
 	var kind string
@@ -181,6 +184,7 @@ func newAgentsCreateCmd() *cobra.Command {
 	return cmd
 }
 
+// newAgentsTestCmd validates a manifest by name and prints the result.
 func newAgentsTestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "test [name]",
@@ -210,6 +214,7 @@ func newAgentsTestCmd() *cobra.Command {
 	}
 }
 
+// defaultManifestPrompt returns a short instruction block for generated agents.
 func defaultManifestPrompt(name string) string {
 	return fmt.Sprintf(`You are %s. Follow project rules, ask before destructive actions, and summarize each change.`, strings.Title(name))
 }
