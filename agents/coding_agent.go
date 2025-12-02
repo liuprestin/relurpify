@@ -99,6 +99,8 @@ func (a *CodingAgent) Execute(ctx context.Context, task *framework.Task, state *
 	return result, nil
 }
 
+// modeFromTask inspects task metadata/context to decide which mode should own
+// execution. It defaults to the general coding mode when nothing is specified.
 func (a *CodingAgent) modeFromTask(task *framework.Task) Mode {
 	if task == nil {
 		return defaultMode
@@ -118,6 +120,8 @@ func (a *CodingAgent) modeFromTask(task *framework.Task) Mode {
 	return defaultMode
 }
 
+// delegateForMode lazily instantiates the underlying agent for the requested
+// mode and reuses it on subsequent calls.
 func (a *CodingAgent) delegateForMode(mode Mode) (framework.Agent, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -134,8 +138,6 @@ func (a *CodingAgent) delegateForMode(mode Mode) (framework.Agent, error) {
 		agent = &PlannerAgent{Model: a.Model, Tools: a.scopedTools(profile.ToolScope), Memory: a.Memory}
 	case ModeAsk:
 		agent = &ReActAgent{Model: a.Model, Tools: a.scopedTools(profile.ToolScope), Memory: a.Memory}
-	case ModeSecurity:
-		agent = &ManualCodingAgent{Mode: profile, Tools: a.scopedTools(profile.ToolScope)}
 	case ModeDocument:
 		agent = &ReActAgent{Model: a.Model, Tools: a.scopedTools(profile.ToolScope), Memory: a.Memory}
 	default:
@@ -148,6 +150,8 @@ func (a *CodingAgent) delegateForMode(mode Mode) (framework.Agent, error) {
 	return agent, nil
 }
 
+// scopedTools clones the global registry but drops tools outside the mode's
+// permission envelope.
 func (a *CodingAgent) scopedTools(scope ToolScope) *framework.ToolRegistry {
 	if a.Tools == nil {
 		return framework.NewToolRegistry()
@@ -161,6 +165,8 @@ func (a *CodingAgent) scopedTools(scope ToolScope) *framework.ToolRegistry {
 	return registry
 }
 
+// toolAllowed checks whether the tool's declared permissions fit inside the
+// mode's scope before the agent exposes it to the LLM.
 func toolAllowed(tool framework.Tool, scope ToolScope) bool {
 	perms := tool.Permissions()
 	if perms.Permissions == nil {
@@ -187,6 +193,8 @@ func toolAllowed(tool framework.Tool, scope ToolScope) bool {
 	return true
 }
 
+// decorateInstruction wraps the user instruction with mode metadata so the LLM
+// is primed with the current restrictions.
 func (a *CodingAgent) decorateInstruction(profile ModeProfile, instruction string) string {
 	if instruction == "" {
 		return ""
@@ -201,6 +209,8 @@ func (a *CodingAgent) decorateInstruction(profile ModeProfile, instruction strin
 	return builder.String()
 }
 
+// cloneContext performs a shallow copy of the task context map to avoid
+// mutating the caller's state.
 func cloneContext(ctx map[string]any) map[string]any {
 	if ctx == nil {
 		return map[string]any{}
