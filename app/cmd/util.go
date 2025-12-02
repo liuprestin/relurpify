@@ -12,6 +12,7 @@ import (
 	"github.com/lexcodex/relurpify/agents"
 )
 
+// ensureWorkspace resolves the workspace CLI flag, defaulting to cwd.
 func ensureWorkspace() string {
 	if workspace == "" {
 		wd, _ := os.Getwd()
@@ -20,6 +21,7 @@ func ensureWorkspace() string {
 	return workspace
 }
 
+// buildRegistry loads manifests + rules scoped to the workspace.
 func buildRegistry(workspace string) (*agents.Registry, error) {
 	paths := []string{}
 	if globalCfg != nil {
@@ -37,6 +39,7 @@ func buildRegistry(workspace string) (*agents.Registry, error) {
 	return reg, nil
 }
 
+// readConfigMap deserializes config.yaml into a generic map for dotted lookups.
 func readConfigMap(path string) (map[string]interface{}, error) {
 	data := map[string]interface{}{}
 	bytes, err := os.ReadFile(path)
@@ -52,6 +55,7 @@ func readConfigMap(path string) (map[string]interface{}, error) {
 	return data, nil
 }
 
+// writeConfigMap persists the config map back to YAML, creating directories.
 func writeConfigMap(path string, data map[string]interface{}) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -63,6 +67,7 @@ func writeConfigMap(path string, data map[string]interface{}) error {
 	return os.WriteFile(path, bytes, 0o644)
 }
 
+// getConfigValue traverses a nested map using dotted notation.
 func getConfigValue(data map[string]interface{}, key string) (interface{}, bool) {
 	parts := strings.Split(key, ".")
 	var current interface{} = data
@@ -80,6 +85,7 @@ func getConfigValue(data map[string]interface{}, key string) (interface{}, bool)
 	return current, true
 }
 
+// setConfigValue mutates/creates nested keys referenced via dotted notation.
 func setConfigValue(data map[string]interface{}, key string, value interface{}) error {
 	parts := strings.Split(key, ".")
 	current := data
@@ -98,6 +104,7 @@ func setConfigValue(data map[string]interface{}, key string, value interface{}) 
 	return nil
 }
 
+// parseValue attempts to coerce CLI input into bool/int/float before storing.
 func parseValue(input string) interface{} {
 	if b, err := strconv.ParseBool(input); err == nil {
 		return b
@@ -111,6 +118,7 @@ func parseValue(input string) interface{} {
 	return input
 }
 
+// prettyValue renders nested values in a human-readable one-line format.
 func prettyValue(v interface{}) string {
 	switch value := v.(type) {
 	case []interface{}:
@@ -127,10 +135,12 @@ func prettyValue(v interface{}) string {
 	}
 }
 
+// sessionDir returns the path where session yaml files live.
 func sessionDir() string {
 	return filepath.Join(agents.ConfigDir(ensureWorkspace()), "sessions")
 }
 
+// sanitizeName normalizes user-provided identifiers for filenames.
 func sanitizeName(name string) string {
 	name = strings.TrimSpace(name)
 	name = strings.ToLower(name)
