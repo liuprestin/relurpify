@@ -3,13 +3,20 @@
 
 ## Tooling Quick Start
 
-Agents discover capabilities through the `framework.ToolRegistry`. The CLI already registers every default tool via `cmd/internal/cliutils.BuildToolRegistry`, but you can experiment manually:
+Agents discover capabilities through the `framework.ToolRegistry`. Every CLI entry point now registers tools only after a manifest has been validated and a gVisor sandbox runner is available. You can mirror that flow manually:
 
 ```go
-registry := cliutils.BuildToolRegistry(workspace)
 ctx := context.Background()
-state := framework.NewContext()
+registration, _ := framework.RegisterAgent(ctx, framework.RuntimeConfig{
+    ManifestPath: filepath.Join(workspace, "relurpify_cfg", "agent.manifest.yaml"),
+    Sandbox:      framework.SandboxConfig{RunscPath: "runsc", ContainerRuntime: "docker", NetworkIsolation: true},
+    BaseFS:       workspace,
+})
+runner, _ := framework.NewSandboxCommandRunner(registration.Manifest, registration.Runtime, workspace)
+registry, _ := runtime.BuildToolRegistry(workspace, runner)
+registry.UsePermissionManager(registration.ID, registration.Permissions)
 
+state := framework.NewContext()
 tool, _ := registry.Get("file_read")
 result, _ := tool.Execute(ctx, state, map[string]interface{}{"path": "README.md"})
 fmt.Println(result.Data["content"])
@@ -47,4 +54,3 @@ The table below lists each built-in tool with an example argument payload. Plug 
 | `lsp_format` | Format code using the registered language server | `{"file": "agents/planner.go", "code": "<current file contents>"}` |
 
 > **Tip:** For tools expecting nested structs (like `position`), you can build the argument map inline as demonstrated above or marshal a JSON object from user input before invoking `tool.Execute`.
-
