@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestConfigHelpers exercises the dotted get/set helpers used by the CLI.
 func TestConfigHelpers(t *testing.T) {
 	data := map[string]interface{}{
 		"permissions": map[string]interface{}{
