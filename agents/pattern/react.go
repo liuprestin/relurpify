@@ -35,6 +35,7 @@ func (a *ReActAgent) Initialize(config *framework.Config) error {
 	return nil
 }
 
+// debugf logs formatted messages whenever agent debug logging is enabled.
 func (a *ReActAgent) debugf(format string, args ...interface{}) {
 	if a == nil || a.Config == nil || !a.Config.DebugAgent {
 		return
@@ -119,9 +120,14 @@ type reactThinkNode struct {
 	task  *framework.Task
 }
 
-func (n *reactThinkNode) ID() string               { return n.id }
+// ID returns the think node identifier.
+func (n *reactThinkNode) ID() string { return n.id }
+
+// Type marks the think step as an observation node.
 func (n *reactThinkNode) Type() framework.NodeType { return framework.NodeTypeObservation }
 
+// Execute drives the “think” portion of the ReAct loop and either emits a tool
+// call or final answer instructions.
 func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("planning")
 	var resp *framework.LLMResponse
@@ -192,6 +198,8 @@ func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) 
 	}, nil
 }
 
+// buildPrompt returns a textual prompt when tool-calling chat APIs are not
+// available.
 func (n *reactThinkNode) buildPrompt(state *framework.Context) string {
 	var tools []string
 	for _, tool := range n.agent.Tools.All() {
@@ -209,6 +217,8 @@ Available tools:
 Recent tool results: %s`, n.task.Instruction, strings.Join(tools, "\n"), last)
 }
 
+// ensureMessages seeds the chat history when tool calling is enabled so each
+// iteration builds on prior reasoning.
 func (n *reactThinkNode) ensureMessages(state *framework.Context, tools []framework.Tool) []framework.Message {
 	messages := getReactMessages(state)
 	if len(messages) > 0 {
@@ -224,6 +234,7 @@ func (n *reactThinkNode) ensureMessages(state *framework.Context, tools []framew
 	return messages
 }
 
+// buildSystemPrompt summarizes tool descriptions for the chat-based workflow.
 func (n *reactThinkNode) buildSystemPrompt(tools []framework.Tool) string {
 	var lines []string
 	for _, tool := range tools {
@@ -240,9 +251,14 @@ type reactActNode struct {
 	agent *ReActAgent
 }
 
-func (n *reactActNode) ID() string               { return n.id }
+// ID returns the node identifier for the “act” step.
+func (n *reactActNode) ID() string { return n.id }
+
+// Type labels the node as a tool execution step.
 func (n *reactActNode) Type() framework.NodeType { return framework.NodeTypeTool }
 
+// Execute runs any pending tool calls or directly invokes the requested tool
+// referenced in the latest decision payload.
 func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("executing")
 	if pending, ok := state.Get("react.tool_calls"); ok {
@@ -302,9 +318,14 @@ type reactObserveNode struct {
 	task  *framework.Task
 }
 
-func (n *reactObserveNode) ID() string               { return n.id }
+// ID returns the node identifier for the observe step.
+func (n *reactObserveNode) ID() string { return n.id }
+
+// Type marks the step as an observation/validation pass.
 func (n *reactObserveNode) Type() framework.NodeType { return framework.NodeTypeObservation }
 
+// Execute captures tool output, tracks loop iterations, and determines whether
+// the ReAct loop should continue.
 func (n *reactObserveNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("validating")
 	iterVal, _ := state.Get("react.iteration")
@@ -368,6 +389,8 @@ type decisionPayload struct {
 	Timestamp time.Time              `json:"timestamp"`
 }
 
+// parseDecision extracts the model's JSON payload (or falls back to the raw
+// text) and normalizes it into the decisionPayload struct.
 func parseDecision(raw string) (decisionPayload, error) {
 	var payload decisionPayload
 	snippet := ExtractJSON(raw)
@@ -407,6 +430,8 @@ func parseDecision(raw string) (decisionPayload, error) {
 	return payload, nil
 }
 
+// normalizeArguments coerces stringified JSON arguments into maps so tools
+// always receive structured input.
 func normalizeArguments(value interface{}) map[string]interface{} {
 	switch v := value.(type) {
 	case map[string]interface{}:
@@ -422,6 +447,7 @@ func normalizeArguments(value interface{}) map[string]interface{} {
 	}
 }
 
+// parseError converts an error message string into an error value.
 func parseError(err string) error {
 	if err == "" {
 		return nil
@@ -431,6 +457,7 @@ func parseError(err string) error {
 
 const reactMessagesKey = "react.messages"
 
+// getReactMessages reads a copy of the stored chat transcript.
 func getReactMessages(state *framework.Context) []framework.Message {
 	raw, ok := state.Get(reactMessagesKey)
 	if !ok {
@@ -445,6 +472,7 @@ func getReactMessages(state *framework.Context) []framework.Message {
 	return copyMessages
 }
 
+// saveReactMessages overwrites the stored transcript with a defensive copy.
 func saveReactMessages(state *framework.Context, messages []framework.Message) {
 	if len(messages) == 0 {
 		state.Set(reactMessagesKey, []framework.Message{})
@@ -455,6 +483,8 @@ func saveReactMessages(state *framework.Context, messages []framework.Message) {
 	state.Set(reactMessagesKey, copyMessages)
 }
 
+// appendToolMessage records tool responses in the transcript so the LLM can
+// observe prior results when tool calling is used.
 func appendToolMessage(state *framework.Context, call framework.ToolCall, res *framework.ToolResult) {
 	messages := getReactMessages(state)
 	if len(messages) == 0 || res == nil {
