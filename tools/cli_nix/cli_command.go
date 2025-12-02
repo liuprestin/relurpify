@@ -1,12 +1,9 @@
 package clinix
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/lexcodex/relurpify/framework"
@@ -26,6 +23,7 @@ type CommandToolConfig struct {
 type CommandTool struct {
 	cfg      CommandToolConfig
 	basePath string
+	runner   framework.CommandRunner
 }
 
 // NewCommandTool builds a reusable CLI wrapper.
@@ -42,6 +40,9 @@ func NewCommandTool(basePath string, cfg CommandToolConfig) *CommandTool {
 func (t *CommandTool) Name() string        { return t.cfg.Name }
 func (t *CommandTool) Description() string { return t.cfg.Description }
 func (t *CommandTool) Category() string    { return t.cfg.Category }
+func (t *CommandTool) SetCommandRunner(r framework.CommandRunner) {
+	t.runner = r
+}
 func (t *CommandTool) Parameters() []framework.ToolParameter {
 	return []framework.ToolParameter{
 		{Name: "args", Type: "array", Required: false, Description: "Arguments passed to the CLI tool."},
@@ -51,6 +52,9 @@ func (t *CommandTool) Parameters() []framework.ToolParameter {
 }
 
 func (t *CommandTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
+	if t.runner == nil {
+		return nil, fmt.Errorf("command runner missing")
+	}
 	userArgs, err := toStringSlice(args["args"])
 	if err != nil {
 		return nil, err
@@ -64,19 +68,16 @@ func (t *CommandTool) Execute(ctx context.Context, state *framework.Context, arg
 			workdir = resolvePath(t.basePath, path)
 		}
 	}
-	runCtx, cancel := context.WithTimeout(ctx, t.cfg.Timeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, t.cfg.Command, finalArgs...)
-	if workdir != "" {
-		cmd.Dir = workdir
-	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	input := ""
 	if raw, ok := args["stdin"]; ok && raw != nil {
-		cmd.Stdin = strings.NewReader(fmt.Sprint(raw))
+		input = fmt.Sprint(raw)
 	}
-	err = cmd.Run()
+	stdout, stderr, err := t.runner.Run(ctx, framework.CommandRequest{
+		Workdir: workdir,
+		Args:    append([]string{t.cfg.Command}, finalArgs...),
+		Input:   input,
+		Timeout: t.cfg.Timeout,
+	})
 	success := err == nil
 	errMsg := ""
 	if err != nil {
@@ -85,21 +86,20 @@ func (t *CommandTool) Execute(ctx context.Context, state *framework.Context, arg
 	return &framework.ToolResult{
 		Success: success,
 		Data: map[string]interface{}{
-			"stdout": stdout.String(),
-			"stderr": stderr.String(),
+			"stdout": stdout,
+			"stderr": stderr,
 		},
 		Error: errMsg,
 		Metadata: map[string]interface{}{
 			"command":  t.cfg.Command,
 			"args":     finalArgs,
-			"work_dir": cmd.Dir,
+			"work_dir": workdir,
 		},
 	}, nil
 }
 
 func (t *CommandTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
-	_, err := exec.LookPath(t.cfg.Command)
-	return err == nil
+	return t.runner != nil
 }
 
 func (t *CommandTool) Permissions() framework.ToolPermissions {
