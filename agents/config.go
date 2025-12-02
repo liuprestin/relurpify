@@ -127,6 +127,8 @@ func (c *GlobalConfig) AgentSearchPaths(workspace string) []string {
 	return resolved
 }
 
+// expandPath resolves ~ and workspace-relative paths into absolute paths while
+// leaving already absolute entries untouched.
 func expandPath(path, workspace string) string {
 	if path == "" {
 		return path
