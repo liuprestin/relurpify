@@ -15,6 +15,7 @@ import (
 	"github.com/lexcodex/relurpify/llm"
 )
 
+// newStartCmd constructs the `relurpify start` CLI command that runs an agent.
 func newStartCmd() *cobra.Command {
 	var mode string
 	var agentName string
@@ -25,6 +26,10 @@ func newStartCmd() *cobra.Command {
 		Use:   "start",
 		Short: "Start a coding agent session",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			runCtx := cmd.Context()
+			if runCtx == nil {
+				runCtx = context.Background()
+			}
 			ws := ensureWorkspace()
 			reg, err := buildRegistry(ws)
 			if err != nil {
@@ -76,9 +81,32 @@ func newStartCmd() *cobra.Command {
 			}
 			model := llm.NewClient(defaultEndpoint(), modelName)
 			model.SetDebugLogging(logLLM)
-			tools, err := runtime.BuildToolRegistry(ws)
+			runtimeCfg := runtime.DefaultConfig()
+			runtimeCfg.Workspace = ws
+			runtimeCfg.ManifestPath = manifest.SourcePath
+			if err := runtimeCfg.Normalize(); err != nil {
+				return err
+			}
+			registration, err := framework.RegisterAgent(runCtx, framework.RuntimeConfig{
+				ManifestPath: runtimeCfg.ManifestPath,
+				Sandbox:      runtimeCfg.Sandbox,
+				AuditLimit:   runtimeCfg.AuditLimit,
+				BaseFS:       runtimeCfg.Workspace,
+				HITLTimeout:  runtimeCfg.HITLTimeout,
+			})
 			if err != nil {
 				return err
+			}
+			runner, err := framework.NewSandboxCommandRunner(registration.Manifest, registration.Runtime, runtimeCfg.Workspace)
+			if err != nil {
+				return err
+			}
+			tools, err := runtime.BuildToolRegistry(ws, runner)
+			if err != nil {
+				return err
+			}
+			if registration.Permissions != nil {
+				tools.UsePermissionManager(registration.ID, registration.Permissions)
 			}
 			memoryPath := filepath.Join(ws, ".relurpish", "memory")
 			memory, err := framework.NewHybridMemory(memoryPath)
@@ -127,6 +155,8 @@ func newStartCmd() *cobra.Command {
 	return cmd
 }
 
+// selectDefaultAgent picks the first registry entry so users can run commands
+// without specifying --agent.
 func selectDefaultAgent(reg *agents.Registry) string {
 	list := reg.List()
 	if len(list) == 0 {
@@ -135,6 +165,8 @@ func selectDefaultAgent(reg *agents.Registry) string {
 	return list[0].Name
 }
 
+// defaultModelName returns the preferred model from config or falls back to a
+// safe local default.
 func defaultModelName() string {
 	if globalCfg != nil && globalCfg.DefaultModel.Name != "" {
 		return globalCfg.DefaultModel.Name
@@ -142,6 +174,7 @@ func defaultModelName() string {
 	return "codellama:13b"
 }
 
+// defaultEndpoint resolves the Ollama endpoint, honoring overrides from env.
 func defaultEndpoint() string {
 	if val := os.Getenv("OLLAMA_HOST"); val != "" {
 		return val
