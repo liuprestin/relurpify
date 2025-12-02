@@ -81,9 +81,14 @@ type expertPlanNode struct {
 	task  *framework.Task
 }
 
-func (n *expertPlanNode) ID() string               { return n.id }
+// ID returns the stable node identifier used inside the graph.
+func (n *expertPlanNode) ID() string { return n.id }
+
+// Type identifies the graph node as part of the system pipeline.
 func (n *expertPlanNode) Type() framework.NodeType { return framework.NodeTypeSystem }
 
+// Execute first collects a plan using the planner delegate so the coding phase
+// has structured guidance.
 func (n *expertPlanNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("planning")
 	result, err := n.agent.planner.Execute(ctx, n.task, state)
@@ -104,9 +109,14 @@ type expertImplementNode struct {
 	task  *framework.Task
 }
 
-func (n *expertImplementNode) ID() string               { return n.id }
+// ID returns the identifier used by the execution graph.
+func (n *expertImplementNode) ID() string { return n.id }
+
+// Type instructs the graph executor to treat this step as a system transition.
 func (n *expertImplementNode) Type() framework.NodeType { return framework.NodeTypeSystem }
 
+// Execute reuses the coding delegate but injects mode + plan context so the
+// downstream agent can render appropriate status.
 func (n *expertImplementNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("executing")
 	task := *n.task
@@ -122,6 +132,8 @@ func (n *expertImplementNode) Execute(ctx context.Context, state *framework.Cont
 	return &framework.Result{NodeID: n.id, Success: true, Data: result.Data}, nil
 }
 
+// mustGet panics when the requested context key is missing. The helper keeps
+// surrounding code clean because the graph wiring guarantees the key exists.
 func mustGet(ctx *framework.Context, key string) interface{} {
 	value, ok := ctx.Get(key)
 	if !ok {
