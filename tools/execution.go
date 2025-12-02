@@ -1,10 +1,8 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"time"
 
 	"github.com/lexcodex/relurpify/framework"
@@ -15,6 +13,7 @@ type RunTestsTool struct {
 	Command []string
 	Workdir string
 	Timeout time.Duration
+	Runner  framework.CommandRunner
 }
 
 func (t *RunTestsTool) Name() string        { return "exec_run_tests" }
@@ -31,7 +30,7 @@ func (t *RunTestsTool) Execute(ctx context.Context, state *framework.Context, ar
 	if pattern != "" {
 		cmdline = append(cmdline, pattern)
 	}
-	stdout, stderr, err := runCommand(ctx, t.Workdir, t.Timeout, cmdline...)
+	stdout, stderr, err := t.run(ctx, cmdline, "")
 	if err != nil {
 		return &framework.ToolResult{
 			Success: false,
@@ -61,11 +60,25 @@ func (t *RunTestsTool) Permissions() framework.ToolPermissions {
 	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
 }
 
+func (t *RunTestsTool) run(ctx context.Context, args []string, input string) (string, string, error) {
+	if t.Runner == nil {
+		return "", "", fmt.Errorf("command runner missing")
+	}
+	req := framework.CommandRequest{
+		Workdir: t.Workdir,
+		Args:    args,
+		Input:   input,
+		Timeout: t.Timeout,
+	}
+	return t.Runner.Run(ctx, req)
+}
+
 // ExecuteCodeTool runs arbitrary snippets inside an interpreter.
 type ExecuteCodeTool struct {
 	Command []string
 	Workdir string
 	Timeout time.Duration
+	Runner  framework.CommandRunner
 }
 
 func (t *ExecuteCodeTool) Name() string { return "exec_run_code" }
@@ -80,7 +93,7 @@ func (t *ExecuteCodeTool) Parameters() []framework.ToolParameter {
 }
 func (t *ExecuteCodeTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	code := fmt.Sprint(args["code"])
-	stdout, stderr, err := runCommandWithInput(ctx, t.Workdir, t.Timeout, code, t.Command...)
+	stdout, stderr, err := t.run(ctx, t.Command, code)
 	success := err == nil
 	resultErr := ""
 	if err != nil {
@@ -114,11 +127,25 @@ func (t *ExecuteCodeTool) Permissions() framework.ToolPermissions {
 	return framework.ToolPermissions{Permissions: perms}
 }
 
+func (t *ExecuteCodeTool) run(ctx context.Context, args []string, input string) (string, string, error) {
+	if t.Runner == nil {
+		return "", "", fmt.Errorf("command runner missing")
+	}
+	req := framework.CommandRequest{
+		Workdir: t.Workdir,
+		Args:    args,
+		Input:   input,
+		Timeout: t.Timeout,
+	}
+	return t.Runner.Run(ctx, req)
+}
+
 // RunLinterTool executes lint commands.
 type RunLinterTool struct {
 	Command []string
 	Workdir string
 	Timeout time.Duration
+	Runner  framework.CommandRunner
 }
 
 func (t *RunLinterTool) Name() string        { return "exec_run_linter" }
@@ -134,7 +161,7 @@ func (t *RunLinterTool) Execute(ctx context.Context, state *framework.Context, a
 	if path := fmt.Sprint(args["path"]); path != "" {
 		cmdline = append(cmdline, path)
 	}
-	stdout, stderr, err := runCommand(ctx, t.Workdir, t.Timeout, cmdline...)
+	stdout, stderr, err := t.run(ctx, cmdline)
 	success := err == nil
 	errStr := ""
 	if err != nil {
@@ -160,11 +187,24 @@ func (t *RunLinterTool) Permissions() framework.ToolPermissions {
 	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
 }
 
+func (t *RunLinterTool) run(ctx context.Context, args []string) (string, string, error) {
+	if t.Runner == nil {
+		return "", "", fmt.Errorf("command runner missing")
+	}
+	req := framework.CommandRequest{
+		Workdir: t.Workdir,
+		Args:    args,
+		Timeout: t.Timeout,
+	}
+	return t.Runner.Run(ctx, req)
+}
+
 // RunBuildTool runs arbitrary build commands.
 type RunBuildTool struct {
 	Command []string
 	Workdir string
 	Timeout time.Duration
+	Runner  framework.CommandRunner
 }
 
 func (t *RunBuildTool) Name() string        { return "exec_run_build" }
@@ -174,7 +214,7 @@ func (t *RunBuildTool) Parameters() []framework.ToolParameter {
 	return []framework.ToolParameter{}
 }
 func (t *RunBuildTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
-	stdout, stderr, err := runCommand(ctx, t.Workdir, t.Timeout, t.Command...)
+	stdout, stderr, err := t.run(ctx)
 	success := err == nil
 	errStr := ""
 	if err != nil {
@@ -200,37 +240,14 @@ func (t *RunBuildTool) Permissions() framework.ToolPermissions {
 	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
 }
 
-func runCommand(ctx context.Context, workdir string, timeout time.Duration, args ...string) (string, string, error) {
-	if len(args) == 0 {
-		return "", "", fmt.Errorf("command required")
+func (t *RunBuildTool) run(ctx context.Context) (string, string, error) {
+	if t.Runner == nil {
+		return "", "", fmt.Errorf("command runner missing")
 	}
-	ctx, cancel := withTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.Dir = workdir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
-}
-
-func runCommandWithInput(ctx context.Context, workdir string, timeout time.Duration, input string, args ...string) (string, string, error) {
-	ctx, cancel := withTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.Dir = workdir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.Stdin = bytes.NewBufferString(input)
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
-}
-
-func withTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout == 0 {
-		return context.WithCancel(ctx)
+	req := framework.CommandRequest{
+		Workdir: t.Workdir,
+		Args:    t.Command,
+		Timeout: t.Timeout,
 	}
-	return context.WithTimeout(ctx, timeout)
+	return t.Runner.Run(ctx, req)
 }
