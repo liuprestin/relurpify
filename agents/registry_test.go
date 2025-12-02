@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestRegistryLoad verifies that manifests are discovered from configured paths.
 func TestRegistryLoad(t *testing.T) {
 	dir := t.TempDir()
 	projectAgents := filepath.Join(ConfigDir(dir), "agents")
