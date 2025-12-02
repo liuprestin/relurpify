@@ -94,6 +94,7 @@ func (r *Registry) Watch() <-chan struct{} {
 	return ch
 }
 
+// broadcast notifies every watcher that the registry contents changed.
 func (r *Registry) broadcast() {
 	for _, ch := range r.watchCh {
 		select {
@@ -103,6 +104,7 @@ func (r *Registry) broadcast() {
 	}
 }
 
+// loadDir loads every manifest file inside the specified directory.
 func (r *Registry) loadDir(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -122,6 +124,8 @@ func (r *Registry) loadDir(dir string) {
 	}
 }
 
+// searchPaths resolves configured agent paths, de-duplicating them and
+// expanding workspace-relative aliases.
 func (r *Registry) searchPaths() []string {
 	paths := r.opts.Paths
 	if len(paths) == 0 {
@@ -164,6 +168,9 @@ func (r *Registry) StartWatcher(stop <-chan struct{}, interval time.Duration) {
 	}()
 }
 
+// snapshot walks the agent directories and returns the newest modification
+// timestamp. The result lets StartWatcher detect changes without storing full
+// directory listings.
 func (r *Registry) snapshot() time.Time {
 	paths := r.searchPaths()
 	var newest time.Time
@@ -181,6 +188,8 @@ func (r *Registry) snapshot() time.Time {
 	return newest
 }
 
+// fetchModTime retrieves the modification time, returning the zero time on
+// errors so callers can ignore missing files.
 func fetchModTime(path string) time.Time {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -201,6 +210,7 @@ type AgentSummary struct {
 	Source      string
 }
 
+// summarizeManifest converts the manifest metadata into a lightweight CLI view.
 func summarizeManifest(m *framework.AgentManifest, workspace string) AgentSummary {
 	source := m.SourcePath
 	if workspace != "" {
