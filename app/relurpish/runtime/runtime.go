@@ -60,18 +60,21 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		return nil, fmt.Errorf("memory init: %w", err)
 	}
 
-	workspaceCfg, err := LoadWorkspaceConfig(cfg.ConfigPath)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+	var workspaceCfg WorkspaceConfig
+	var allowedTools []string
+	if cfg.ConfigPath != "" {
+		if loaded, err := LoadWorkspaceConfig(cfg.ConfigPath); err == nil {
+			workspaceCfg = loaded
+			if workspaceCfg.Model != "" {
+				cfg.OllamaModel = workspaceCfg.Model
+			}
+			if len(workspaceCfg.Agents) > 0 {
+				cfg.AgentName = workspaceCfg.Agents[0]
+			}
+			allowedTools = append(allowedTools, workspaceCfg.AllowedTools...)
+		} else if !errors.Is(err, os.ErrNotExist) {
 			logger.Printf("workspace config load failed: %v", err)
 		}
-		workspaceCfg = WorkspaceConfig{}
-	}
-	if workspaceCfg.Model != "" {
-		cfg.OllamaModel = workspaceCfg.Model
-	}
-	if len(workspaceCfg.Agents) > 0 {
-		cfg.AgentName = workspaceCfg.Agents[0]
 	}
 
 	registration, err := framework.RegisterAgent(ctx, framework.RuntimeConfig{
@@ -98,13 +101,33 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	if registration.Permissions != nil {
 		registry.UsePermissionManager(registration.ID, registration.Permissions)
 	}
+	if registration.Manifest == nil || registration.Manifest.Spec.Agent == nil {
+		logFile.Close()
+		return nil, fmt.Errorf("agent manifest missing spec.agent configuration")
+	}
+	if cfg.AgentName == "" {
+		cfg.AgentName = registration.Manifest.Metadata.Name
+	}
+	agentSpec := registration.Manifest.Spec.Agent
+	if agentSpec.Model.Name == "" {
+		logFile.Close()
+		return nil, fmt.Errorf("agent manifest missing spec.agent.model.name")
+	}
+	if cfg.OllamaModel == "" {
+		cfg.OllamaModel = agentSpec.Model.Name
+	}
+	if cfg.OllamaModel == "" {
+		logFile.Close()
+		return nil, fmt.Errorf("ollama model not configured; update %s", cfg.ManifestPath)
+	}
 	model := llm.NewClient(cfg.OllamaEndpoint, cfg.OllamaModel)
 	agent := instantiateAgent(cfg, model, registry, memory)
 	agentCfg := &framework.Config{
-		Name:           cfg.AgentLabel(),
-		Model:          cfg.OllamaModel,
-		OllamaEndpoint: cfg.OllamaEndpoint,
-		MaxIterations:  8,
+		Name:              cfg.AgentLabel(),
+		Model:             cfg.OllamaModel,
+		OllamaEndpoint:    cfg.OllamaEndpoint,
+		MaxIterations:     8,
+		OllamaToolCalling: agentSpec.ToolCallingEnabled(),
 	}
 	if err := agent.Initialize(agentCfg); err != nil {
 		logFile.Close()
@@ -115,8 +138,8 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 			_ = reflection.Delegate.Initialize(agentCfg)
 		}
 	}
-	if len(workspaceCfg.AllowedTools) > 0 {
-		registry.RestrictTo(workspaceCfg.AllowedTools)
+	if len(allowedTools) > 0 {
+		registry.RestrictTo(allowedTools)
 	}
 	rt := &Runtime{
 		Config:       cfg,
