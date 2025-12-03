@@ -41,8 +41,7 @@ func DefaultConfig() Config {
 		ManifestPath: filepath.Join(cfgDir, "agent.manifest.yaml"),
 		MemoryPath:   filepath.Join(cwd, ".relurpish", "memory"),
 		LogPath:      filepath.Join(cwd, ".relurpish", "relurpish.log"),
-		ConfigPath:   filepath.Join(cfgDir, "workspace.yaml"),
-		OllamaModel:  "deepseek-r1:7b",
+		ConfigPath:   filepath.Join(cfgDir, "config.yaml"),
 		ServerAddr:   ":8080",
 		AuditLimit:   512,
 		HITLTimeout:  45 * time.Second,
@@ -87,7 +86,7 @@ func (c *Config) Normalize() error {
 		c.LogPath = filepath.Join(c.Workspace, c.LogPath)
 	}
 	if c.ConfigPath == "" {
-		c.ConfigPath = filepath.Join(configDir, "workspace.yaml")
+		c.ConfigPath = filepath.Join(configDir, "agent.manifest.yaml")
 	}
 	if !filepath.IsAbs(c.ConfigPath) {
 		c.ConfigPath = filepath.Join(c.Workspace, c.ConfigPath)
@@ -97,9 +96,6 @@ func (c *Config) Normalize() error {
 	}
 	if c.OllamaEndpoint == "" {
 		c.OllamaEndpoint = "http://localhost:11434"
-	}
-	if c.OllamaModel == "" {
-		c.OllamaModel = "deepseek-r1:7b"
 	}
 	if c.ServerAddr == "" {
 		c.ServerAddr = ":8080"
