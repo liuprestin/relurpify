@@ -62,8 +62,9 @@ func (m Model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	promptBarHeight := 1
 	feedHeight := max(1, msg.Height-statusBarHeight-promptBarHeight)
 
-	if !m.ready {
-		m.feed = viewport.New(msg.Width, feedHeight)
+	if !m.ready || m.feed == nil {
+		v := viewport.New(msg.Width, feedHeight)
+		m.feed = &v
 		m.ready = true
 	} else {
 		m.feed.Width = msg.Width
@@ -96,9 +97,25 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":
 		return m.submitPrompt()
-	case "up", "down", "pgup", "pgdown", "home", "end":
+	case "up", "pgup", "home":
+		if m.feed == nil {
+			return m, nil
+		}
 		var cmd tea.Cmd
-		m.feed, cmd = m.feed.Update(msg)
+		updated, cmd := m.feed.Update(msg)
+		m.feed = &updated
+		m.autoFollow = m.feed.AtBottom()
+		return m, cmd
+	case "down", "pgdown", "end":
+		if m.feed == nil {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		updated, cmd := m.feed.Update(msg)
+		m.feed = &updated
+		if m.feed.AtBottom() {
+			m.autoFollow = true
+		}
 		return m, cmd
 	case "tab":
 		return m.toggleExpandAtCursor()
@@ -182,7 +199,7 @@ func (m Model) handleStreamToken(msg StreamTokenMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.messages = append(m.messages, partial)
 	}
-	m.feed.GotoBottom()
+	m = m.refreshFeedContent()
 	if m.streamCh != nil {
 		return m, listenToStream(m.streamCh)
 	}
@@ -200,6 +217,7 @@ func (m Model) handleStreamComplete(msg StreamCompleteMsg) (tea.Model, tea.Cmd) 
 	} else {
 		m.messages = append(m.messages, final)
 	}
+	m = m.refreshFeedContent()
 
 	m.session.TotalTokens += msg.TokensUsed
 	m.session.TotalDuration += msg.Duration
@@ -247,7 +265,7 @@ func (m Model) handleUpdateTask(msg UpdateTaskMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 	}
-	return m, nil
+	return m.refreshFeedContent(), nil
 }
 
 // handleCommand dispatchers -------------------------------------------------
@@ -260,8 +278,7 @@ func (m Model) addSystemMessage(text string) Model {
 		Content:   MessageContent{Text: text},
 	}
 	m.messages = append(m.messages, sys)
-	m.feed.GotoBottom()
-	return m
+	return m.refreshFeedContent()
 }
 
 func (m Model) approveCurrentChange() (tea.Model, tea.Cmd) {
@@ -312,7 +329,7 @@ func (m Model) toggleExpandAtCursor() (tea.Model, tea.Cmd) {
 		msg.Content.Expanded["changes"] = !msg.Content.Expanded["changes"]
 		break
 	}
-	return m, nil
+	return m.refreshFeedContent(), nil
 }
 
 // listenToStream adapts Go channels to Bubble Tea commands for streaming.

@@ -37,7 +37,7 @@ type Model struct {
 	runtime *runtimesvc.Runtime
 	config  runtimesvc.Config
 
-	feed  viewport.Model
+	feed  *viewport.Model
 	input textinput.Model
 
 	statusBar StatusBar
@@ -57,6 +57,7 @@ type Model struct {
 	streamCh  chan tea.Msg
 
 	focusIndex int
+	autoFollow bool
 }
 
 // InputMode tracks the role of the prompt bar.
@@ -239,7 +240,8 @@ func NewModel(rt *runtimesvc.Runtime) Model {
 	input.Placeholder = "Type a message or /help for commands"
 	input.Focus()
 
-	feed := viewport.New(0, 0)
+	v := viewport.New(0, 0)
+	vp := &v
 
 	session := &Session{
 		ID:        fmt.Sprintf("session-%d", time.Now().UnixNano()),
@@ -284,15 +286,16 @@ func NewModel(rt *runtimesvc.Runtime) Model {
 	}
 
 	return Model{
-		runtime:   rt,
-		config:    cfg,
-		feed:      feed,
-		input:     input,
-		statusBar: status,
-		messages:  []Message{},
-		context:   ctx,
-		session:   session,
-		mode:      ModeNormal,
+		runtime:    rt,
+		config:     cfg,
+		feed:       vp,
+		input:      input,
+		statusBar:  status,
+		messages:   []Message{},
+		context:    ctx,
+		session:    session,
+		mode:       ModeNormal,
+		autoFollow: true,
 	}
 }
 
@@ -312,14 +315,13 @@ func (m Model) submitPrompt() (Model, tea.Cmd) {
 		},
 	}
 	m.messages = append(m.messages, userMsg)
+	m = m.refreshFeedContent()
 
 	m.input.SetValue("")
 	m.mode = ModeNormal
 
 	m.streaming = true
 	m.streamBuf = NewMessageBuilder()
-
-	m.feed.GotoBottom()
 
 	ch := make(chan tea.Msg)
 	m.streamCh = ch
@@ -350,7 +352,10 @@ func (m Model) runAgentStream(ch chan tea.Msg, prompt string) {
 		"source":        "relurpish",
 		"context_files": append([]string(nil), m.context.Files...),
 	}
-	result, err := m.runtime.ExecuteInstruction(ctx, prompt, framework.TaskTypeCodeModification, metadata)
+	if _, ok := metadata["mode"]; !ok && m.session != nil {
+		metadata["mode"] = m.session.Mode
+	}
+	result, err := m.runtime.ExecuteInstruction(ctx, prompt, framework.TaskTypeCodeGeneration, metadata)
 	if err != nil {
 		ch <- StreamErrorMsg{Error: err}
 		ch <- StreamCompleteMsg{Duration: time.Since(start), TokensUsed: 0}
@@ -411,4 +416,16 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// refreshFeedContent ensures the viewport reflects the latest messages.
+func (m Model) refreshFeedContent() Model {
+	if !m.ready || m.feed == nil {
+		return m
+	}
+	m.feed.SetContent(m.renderMessages())
+	if m.autoFollow {
+		m.feed.GotoBottom()
+	}
+	return m
 }

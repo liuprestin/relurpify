@@ -8,11 +8,10 @@ import (
 
 // View composes the scrollable feed, prompt bar, and status bar.
 func (m Model) View() string {
-	if !m.ready {
+	if !m.ready || m.feed == nil {
 		return "Initializing..."
 	}
 
-	m.feed.SetContent(m.renderMessages())
 	feed := m.feed.View()
 	prompt := m.renderPromptBar()
 	status := m.statusBar.View(m.width)
