@@ -44,13 +44,22 @@ type Edge struct {
 // and Execute walks the graph while recording telemetry plus enforcing invariants
 // such as bounded node visits (to guard against accidental cycles).
 type Graph struct {
-	mu            sync.RWMutex
-	nodes         map[string]Node
-	edges         map[string][]Edge
-	startNodeID   string
-	maxNodeVisits int
-	telemetry     Telemetry
+	mu                 sync.RWMutex
+	nodes              map[string]Node
+	edges              map[string][]Edge
+	startNodeID        string
+	maxNodeVisits      int
+	telemetry          Telemetry
+	execMu             sync.Mutex
+	visitCounts        map[string]int
+	executionPath      []string
+	checkpointInterval int
+	checkpointCallback CheckpointCallback
+	lastCheckpointNode string
 }
+
+// CheckpointCallback receives checkpoints generated during execution.
+type CheckpointCallback func(checkpoint *GraphCheckpoint) error
 
 // NewGraph creates a graph with sane defaults.
 func NewGraph() *Graph {
@@ -58,7 +67,18 @@ func NewGraph() *Graph {
 		nodes:         make(map[string]Node),
 		edges:         make(map[string][]Edge),
 		maxNodeVisits: 1024,
+		visitCounts:   make(map[string]int),
+		executionPath: make([]string, 0),
 	}
+}
+
+// WithCheckpointing configures automatic checkpointing for the graph.
+func (g *Graph) WithCheckpointing(interval int, callback CheckpointCallback) *Graph {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.checkpointInterval = interval
+	g.checkpointCallback = callback
+	return g
 }
 
 // SetTelemetry wires a telemetry sink for execution traces.
@@ -148,8 +168,6 @@ func (g *Graph) ExecuteFromSnapshot(ctx context.Context, state *Context, snapsho
 	if err := g.Validate(); err != nil {
 		return nil, err
 	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
 
 	taskID := g.extractTaskID(state)
 	g.emit(Event{Type: EventGraphStart, TaskID: taskID, Timestamp: time.Now().UTC()})
@@ -182,25 +200,38 @@ func (g *Graph) ExecuteFromSnapshot(ctx context.Context, state *Context, snapsho
 		return nil, execErr
 	}
 
-	visited := make(map[string]int)
+	lastResult, err := g.run(ctx, state, current, true, taskID)
+	execErr = err
+	return lastResult, err
+}
+
+func (g *Graph) run(ctx context.Context, state *Context, current string, reset bool, taskID string) (*Result, error) {
+	g.execMu.Lock()
+	defer g.execMu.Unlock()
+	if reset {
+		g.visitCounts = make(map[string]int)
+		g.executionPath = make([]string, 0)
+		g.lastCheckpointNode = ""
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
 	var lastResult *Result
 	for current != "" {
 		select {
 		case <-ctx.Done():
-			execErr = ctx.Err()
-			return nil, execErr
+			return nil, ctx.Err()
 		default:
 		}
 		node, ok := g.nodes[current]
 		if !ok {
-			execErr = fmt.Errorf("node %s missing", current)
-			return nil, execErr
+			return nil, fmt.Errorf("node %s missing", current)
 		}
-		visited[current]++
-		if visited[current] > g.maxNodeVisits {
-			execErr = fmt.Errorf("potential cycle detected at node %s", current)
-			return nil, execErr
+		g.visitCounts[current]++
+		if g.visitCounts[current] > g.maxNodeVisits {
+			return nil, fmt.Errorf("potential cycle detected at node %s", current)
 		}
+		g.executionPath = append(g.executionPath, current)
 		g.emit(Event{
 			Type:      EventNodeStart,
 			NodeID:    current,
@@ -209,15 +240,15 @@ func (g *Graph) ExecuteFromSnapshot(ctx context.Context, state *Context, snapsho
 		})
 		result, err := node.Execute(ctx, state)
 		if err != nil {
-			execErr = fmt.Errorf("node %s execution failed: %w", current, err)
+			err = fmt.Errorf("node %s execution failed: %w", current, err)
 			g.emit(Event{
 				Type:      EventNodeError,
 				NodeID:    current,
 				TaskID:    taskID,
 				Timestamp: time.Now().UTC(),
-				Message:   execErr.Error(),
+				Message:   err.Error(),
 			})
-			return nil, execErr
+			return nil, err
 		}
 		if result == nil {
 			result = &Result{NodeID: current, Success: true, Data: map[string]interface{}{}}
@@ -236,15 +267,63 @@ func (g *Graph) ExecuteFromSnapshot(ctx context.Context, state *Context, snapsho
 				"success": result.Success,
 			},
 		})
+		g.maybeCheckpoint(taskID, current, state)
 		next, err := g.nextNodes(ctx, state, node, result)
 		if err != nil {
-			execErr = err
-			return nil, execErr
+			return nil, err
 		}
 		current = next
 	}
-	execErr = nil
 	return lastResult, nil
+}
+
+func (g *Graph) maybeCheckpoint(taskID, currentNode string, state *Context) {
+	if g.checkpointInterval == 0 || g.checkpointCallback == nil {
+		return
+	}
+	if !g.shouldCheckpoint(currentNode) {
+		return
+	}
+	checkpoint, err := g.CreateCheckpoint(taskID, currentNode, state)
+	if err != nil {
+		g.emit(Event{
+			Type:      EventNodeError,
+			NodeID:    currentNode,
+			TaskID:    taskID,
+			Timestamp: time.Now().UTC(),
+			Message:   fmt.Sprintf("checkpoint creation failed: %v", err),
+		})
+		return
+	}
+	if err := g.checkpointCallback(checkpoint); err != nil {
+		g.emit(Event{
+			Type:      EventNodeError,
+			NodeID:    currentNode,
+			TaskID:    taskID,
+			Timestamp: time.Now().UTC(),
+			Message:   fmt.Sprintf("checkpoint callback failed: %v", err),
+		})
+		return
+	}
+	g.lastCheckpointNode = currentNode
+}
+
+func (g *Graph) shouldCheckpoint(currentNode string) bool {
+	if g.checkpointInterval == 0 {
+		return false
+	}
+	pathLength := len(g.executionPath)
+	lastIndex := 0
+	if g.lastCheckpointNode != "" {
+		for idx := len(g.executionPath) - 1; idx >= 0; idx-- {
+			if g.executionPath[idx] == g.lastCheckpointNode {
+				lastIndex = idx + 1
+				break
+			}
+		}
+	}
+	nodesSinceCheckpoint := pathLength - lastIndex
+	return nodesSinceCheckpoint >= g.checkpointInterval
 }
 
 // nextNodes evaluates the outgoing edges for a node. Parallel edges are
@@ -314,6 +393,7 @@ func (g *Graph) executeBranch(ctx context.Context, start string, state *Context)
 		edges:         g.edges,
 		startNodeID:   start,
 		maxNodeVisits: g.maxNodeVisits,
+		telemetry:     g.telemetry,
 	}
 	return subGraph.Execute(ctx, state)
 }
