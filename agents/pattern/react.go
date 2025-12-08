@@ -14,11 +14,14 @@ import (
 
 // ReActAgent implements the Reason+Act pattern.
 type ReActAgent struct {
-	Model         framework.LanguageModel
-	Tools         *framework.ToolRegistry
-	Memory        framework.MemoryStore
-	Config        *framework.Config
-	maxIterations int
+	Model               framework.LanguageModel
+	Tools               *framework.ToolRegistry
+	Memory              framework.MemoryStore
+	Config              *framework.Config
+	maxIterations       int
+	budget              *framework.ContextBudget
+	contextManager      *framework.ContextManager
+	compressionStrategy framework.CompressionStrategy
 }
 
 // Initialize wires configuration.
@@ -31,6 +34,16 @@ func (a *ReActAgent) Initialize(config *framework.Config) error {
 	}
 	if a.Tools == nil {
 		a.Tools = framework.NewToolRegistry()
+	}
+	if a.budget == nil {
+		a.budget = framework.NewContextBudget(8000)
+	}
+	a.budget.SetReservations(1000, 2000, 1000)
+	if a.contextManager == nil {
+		a.contextManager = framework.NewContextManager(a.budget)
+	}
+	if a.compressionStrategy == nil {
+		a.compressionStrategy = framework.NewSimpleCompressionStrategy()
 	}
 	return nil
 }
@@ -112,6 +125,52 @@ func (a *ReActAgent) BuildGraph(task *framework.Task) (*framework.Graph, error) 
 	return graph, nil
 }
 
+func (a *ReActAgent) enforceBudget(state *framework.Context) {
+	if a.budget == nil {
+		return
+	}
+	var tools []framework.Tool
+	if a.Tools != nil {
+		tools = a.Tools.All()
+	}
+	a.budget.UpdateUsage(state, tools)
+	budgetState := a.budget.CheckBudget()
+	if budgetState >= framework.BudgetNeedsCompression && a.compressionStrategy != nil && a.Model != nil {
+		if err := state.CompressHistory(a.compressionStrategy.KeepRecent(), a.Model, a.compressionStrategy); err != nil {
+			a.debugf("compression failed: %v", err)
+		} else {
+			a.budget.UpdateUsage(state, tools)
+		}
+	}
+	if budgetState == framework.BudgetCritical && a.contextManager != nil {
+		targetTokens := a.budget.AvailableForContext / 4
+		if targetTokens == 0 {
+			targetTokens = 1
+		}
+		if err := a.contextManager.MakeSpace(targetTokens); err != nil {
+			a.debugf("context pruning failed: %v", err)
+		}
+	}
+}
+
+func (a *ReActAgent) recordLatestInteraction(state *framework.Context) {
+	if a.contextManager == nil {
+		return
+	}
+	interaction, ok := state.LatestInteraction()
+	if !ok {
+		return
+	}
+	item := &framework.InteractionContextItem{
+		Interaction: interaction,
+		Relevance:   1.0,
+		PriorityVal: 1,
+	}
+	if err := a.contextManager.AddItem(item); err != nil {
+		a.debugf("context item add failed: %v", err)
+	}
+}
+
 // --- ReAct Graph nodes ---
 
 type reactThinkNode struct {
@@ -130,6 +189,7 @@ func (n *reactThinkNode) Type() framework.NodeType { return framework.NodeTypeOb
 // call or final answer instructions.
 func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("planning")
+	n.agent.enforceBudget(state)
 	var resp *framework.LLMResponse
 	var err error
 	tools := n.agent.Tools.All()
@@ -161,6 +221,7 @@ func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) 
 		return nil, err
 	}
 	state.AddInteraction("assistant", resp.Text, map[string]interface{}{"node": n.id})
+	n.agent.recordLatestInteraction(state)
 	var decision decisionPayload
 	if len(resp.ToolCalls) > 0 {
 		decision = decisionPayload{
