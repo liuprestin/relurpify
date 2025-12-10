@@ -73,6 +73,7 @@ type Config struct {
 	OllamaToolCalling  bool
 	DebugLLM           bool
 	DebugAgent         bool
+	AgentSpec          *AgentRuntimeSpec
 }
 
 // Result captures the result of a graph or agent execution. Creating a shared
