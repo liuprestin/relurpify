@@ -29,6 +29,12 @@ type ToolParameter struct {
 	Default     interface{}
 }
 
+// PermissionAware allows tools to receive the permission manager for fine-grained
+// runtime checks (e.g. verifying file paths against allowlists).
+type PermissionAware interface {
+	SetPermissionManager(manager *PermissionManager, agentID string)
+}
+
 // ToolResult is returned by every tool execution.
 type ToolResult struct {
 	Success  bool
@@ -61,6 +67,12 @@ func (r *ToolRegistry) Register(tool Tool) error {
 	if _, exists := r.tools[tool.Name()]; exists {
 		return fmt.Errorf("tool %s already registered", tool.Name())
 	}
+	// If we already have a manager, inject it immediately
+	if r.permissionManager != nil {
+		if aware, ok := tool.(PermissionAware); ok {
+			aware.SetPermissionManager(r.permissionManager, r.registeredAgentID)
+		}
+	}
 	r.tools[tool.Name()] = r.wrapTool(tool)
 	return nil
 }
@@ -91,7 +103,24 @@ func (r *ToolRegistry) UsePermissionManager(agentID string, manager *PermissionM
 	r.permissionManager = manager
 	r.registeredAgentID = agentID
 	for name, tool := range r.tools {
-		r.tools[name] = r.wrapTool(tool)
+		// Unwrap secureTool to get the inner tool if needed, 
+		// but here we just check the interface on the stored tool 
+		// (which might be secureTool, so we need to be careful).
+		// wrapTool handles wrapping, but we need to inject into the *inner* tool.
+		// Since r.tools stores the *wrapped* tool after Register/UsePermissionManager,
+		// we need to access the underlying tool if it's already wrapped.
+		
+		var inner Tool = tool
+		if secure, ok := tool.(*secureTool); ok {
+			inner = secure.Tool
+		}
+		
+		if aware, ok := inner.(PermissionAware); ok {
+			aware.SetPermissionManager(manager, agentID)
+		}
+		
+		// If it wasn't wrapped yet, wrap it. If it was, wrapTool handles re-wrapping (updating fields).
+		r.tools[name] = r.wrapTool(inner)
 	}
 }
 
