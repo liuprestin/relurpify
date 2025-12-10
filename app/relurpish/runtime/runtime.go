@@ -13,6 +13,7 @@ import (
 
 	"github.com/lexcodex/relurpify/agents"
 	"github.com/lexcodex/relurpify/framework"
+	"github.com/lexcodex/relurpify/framework/ast"
 	"github.com/lexcodex/relurpify/llm"
 	"github.com/lexcodex/relurpify/server"
 	"github.com/lexcodex/relurpify/tools"
@@ -219,6 +220,23 @@ func BuildToolRegistry(workspace string, runner framework.CommandRunner) (*frame
 			return nil, err
 		}
 	}
+	indexDir := filepath.Join(workspace, ".ast_index")
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		return nil, err
+	}
+	store, err := ast.NewSQLiteStore(filepath.Join(indexDir, "index.db"))
+	if err != nil {
+		return nil, err
+	}
+	manager := ast.NewIndexManager(store, ast.IndexConfig{
+		WorkspacePath:   workspace,
+		ParallelWorkers: 4,
+	})
+	tools.AttachASTSymbolProvider(manager, registry)
+	if err := register(tools.NewASTTool(manager)); err != nil {
+		return nil, err
+	}
+	go manager.IndexWorkspace()
 	return registry, nil
 }
 
