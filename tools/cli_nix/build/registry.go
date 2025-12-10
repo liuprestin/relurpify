@@ -8,5 +8,13 @@ func Tools(basePath string) []framework.Tool {
 		NewMakeTool(basePath),
 		NewCMakeTool(basePath),
 		NewPkgConfigTool(basePath),
+		NewGDBTool(basePath),
+		NewValgrindTool(basePath),
+		NewPatchTool(basePath),
+		NewDiffTool(basePath),
+		NewLddTool(basePath),
+		NewObjdumpTool(basePath),
+		NewPerfTool(basePath),
+		NewStraceTool(basePath),
 	}
 }
