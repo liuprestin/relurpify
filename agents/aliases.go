@@ -11,3 +11,9 @@ type ReActAgent = pattern.ReActAgent
 
 // ReflectionAgent re-exports the reviewer agent.
 type ReflectionAgent = pattern.ReflectionAgent
+
+// ModeRuntimeProfile exposes the pattern runtime profile struct.
+type ModeRuntimeProfile = pattern.ModeRuntimeProfile
+
+// ContextPreferences exposes context tuning knobs.
+type ContextPreferences = pattern.ContextPreferences
