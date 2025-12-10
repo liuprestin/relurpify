@@ -38,7 +38,7 @@ func (a *ExpertCoderAgent) Initialize(cfg *framework.Config) error {
 	}
 
 	// Initialize coordinator with a default budget
-	a.coordinator = NewAgentCoordinator(nil, framework.NewContextBudget(16000))
+	a.coordinator = NewAgentCoordinator(cfg.Telemetry, framework.NewContextBudget(16000))
 	a.coordinator.RegisterAgent("planner", planner)
 	a.coordinator.RegisterAgent("executor", coder)
 	
