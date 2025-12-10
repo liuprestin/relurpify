@@ -440,19 +440,46 @@ func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) 
 // available.
 func (n *reactThinkNode) buildPrompt(state *framework.Context) string {
 	var tools []string
+	var hasLSP, hasAST bool
 	for _, tool := range n.agent.Tools.All() {
 		toolLine := fmt.Sprintf("%s: %s", tool.Name(), tool.Description())
 		tools = append(tools, toolLine)
+		if strings.HasPrefix(tool.Name(), "lsp_") {
+			hasLSP = true
+		}
+		if strings.HasPrefix(tool.Name(), "ast_") {
+			hasAST = true
+		}
 	}
 	var last string
 	if res, ok := state.Get("react.last_tool_result"); ok {
 		last = fmt.Sprint(res)
 	}
+
+	var guidance strings.Builder
+	if hasLSP || hasAST {
+		guidance.WriteString("\nCode Analysis:\n")
+		if hasLSP {
+			guidance.WriteString("- Prefer LSP tools for precise navigation.\n")
+		}
+		if hasAST {
+			guidance.WriteString("- Prefer AST tools for structure queries.\n")
+		}
+	}
+	if val, ok := n.task.Context["plan"]; ok {
+		if planJSON, err := json.MarshalIndent(val, "", "  "); err == nil {
+			guidance.WriteString("\nPlan:\n")
+			guidance.Write(planJSON)
+			guidance.WriteRune('\n')
+		}
+	}
+
 	return fmt.Sprintf(`You are a ReAct agent tasked with "%s".
 You can call functions using the provided tools. If you need a tool, emit a tool call. If you are done, provide the final answer text without tool calls or return the JSON object: {"thought": "...", "tool": "tool_name or none", "arguments": {...}, "complete": bool}
 Available tools:
 %s
-Recent tool results: %s`, n.task.Instruction, strings.Join(tools, "\n"), last)
+%s
+Recent tool results: %s`, n.task.Instruction, strings.Join(tools, "\n"), guidance.String(), last)
 }
 
 // ensureMessages seeds the chat history when tool calling is enabled so each
@@ -475,13 +502,43 @@ func (n *reactThinkNode) ensureMessages(state *framework.Context, tools []framew
 // buildSystemPrompt summarizes tool descriptions for the chat-based workflow.
 func (n *reactThinkNode) buildSystemPrompt(tools []framework.Tool) string {
 	var lines []string
+	var hasLSP, hasAST bool
 	for _, tool := range tools {
 		lines = append(lines, fmt.Sprintf("- %s: %s", tool.Name(), tool.Description()))
+		if strings.HasPrefix(tool.Name(), "lsp_") {
+			hasLSP = true
+		}
+		if strings.HasPrefix(tool.Name(), "ast_") {
+			hasAST = true
+		}
 	}
+
+	var guidance strings.Builder
+	if hasLSP || hasAST {
+		guidance.WriteString("\n\n### Code Analysis Capabilities\n")
+		if hasLSP {
+			guidance.WriteString("- Use 'lsp_*' tools to find definitions, references, and type information accurately.\n")
+		}
+		if hasAST {
+			guidance.WriteString("- Use 'ast_*' tools to query the codebase structure (symbols, dependencies) efficiently.\n")
+		}
+		guidance.WriteString("- Always analyze the code context (definitions/refs) BEFORE attempting edits.\n")
+	}
+
+	// Inject Plan if available from Coordinator
+	if val, ok := n.task.Context["plan"]; ok {
+		// Attempt to marshal plan to JSON for the prompt
+		if planJSON, err := json.MarshalIndent(val, "", "  "); err == nil {
+			guidance.WriteString("\n\n### Execution Plan\nFollow this plan:\n")
+			guidance.Write(planJSON)
+			guidance.WriteRune('\n')
+		}
+	}
+
 	return fmt.Sprintf(`You are a ReAct agent. Think carefully, call tools when required, and finish with a concise summary.
 Available tools:
-%s
-When you call a tool, wait for its response before continuing. When the work is complete, provide the final answer as plain text.`, strings.Join(lines, "\n"))
+%s%s
+When you call a tool, wait for its response before continuing. When the work is complete, provide the final answer as plain text.`, strings.Join(lines, "\n"), guidance.String())
 }
 
 type reactActNode struct {
