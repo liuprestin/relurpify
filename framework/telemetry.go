@@ -1,7 +1,10 @@
 package framework
 
 import (
+	"encoding/json"
 	"log"
+	"os"
+	"sync"
 	"time"
 )
 
@@ -9,21 +12,26 @@ import (
 type EventType string
 
 const (
-	EventGraphStart  EventType = "graph_start"
-	EventGraphFinish EventType = "graph_finish"
-	EventNodeStart   EventType = "node_start"
-	EventNodeFinish  EventType = "node_finish"
-	EventNodeError   EventType = "node_error"
+	EventGraphStart   EventType = "graph_start"
+	EventGraphFinish  EventType = "graph_finish"
+	EventNodeStart    EventType = "node_start"
+	EventNodeFinish   EventType = "node_finish"
+	EventNodeError    EventType = "node_error"
+	EventAgentStart   EventType = "agent_start"
+	EventAgentFinish  EventType = "agent_finish"
+	EventToolCall     EventType = "tool_call"
+	EventToolResult   EventType = "tool_result"
+	EventStateChange  EventType = "state_change"
 )
 
 // Event captures structured telemetry data.
 type Event struct {
-	Type      EventType
-	NodeID    string
-	TaskID    string
-	Message   string
-	Timestamp time.Time
-	Metadata  map[string]interface{}
+	Type      EventType              `json:"type"`
+	NodeID    string                 `json:"node_id,omitempty"`
+	TaskID    string                 `json:"task_id,omitempty"`
+	Message   string                 `json:"message,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // Telemetry captures execution traces emitted by the graph runtime. Production
@@ -31,6 +39,59 @@ type Event struct {
 // swap in lightweight loggers.
 type Telemetry interface {
 	Emit(event Event)
+}
+
+// MultiplexTelemetry broadcasts events to multiple sinks.
+type MultiplexTelemetry struct {
+	Sinks []Telemetry
+}
+
+// Emit forwards the event to all registered sinks.
+func (m MultiplexTelemetry) Emit(event Event) {
+	for _, s := range m.Sinks {
+		s.Emit(event)
+	}
+}
+
+// JSONFileTelemetry writes events as newline-delimited JSON to a file.
+// This allows external tools to tail and process the stream in real-time.
+type JSONFileTelemetry struct {
+	path string
+	file *os.File
+	enc  *json.Encoder
+	mu   sync.Mutex
+}
+
+// NewJSONFileTelemetry opens (or creates) the log file.
+func NewJSONFileTelemetry(path string) (*JSONFileTelemetry, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	return &JSONFileTelemetry{
+		path: path,
+		file: f,
+		enc:  json.NewEncoder(f),
+	}, nil
+}
+
+// Emit writes the JSON record.
+func (j *JSONFileTelemetry) Emit(event Event) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.enc != nil {
+		_ = j.enc.Encode(event)
+	}
+}
+
+// Close releases the file handle.
+func (j *JSONFileTelemetry) Close() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.file != nil {
+		return j.file.Close()
+	}
+	return nil
 }
 
 // ContextTelemetry extends telemetry with context-management specific signals.
