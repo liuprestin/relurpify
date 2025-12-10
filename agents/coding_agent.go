@@ -30,6 +30,27 @@ func (a *CodingAgent) Initialize(cfg *framework.Config) error {
 	if a.Tools == nil {
 		a.Tools = framework.NewToolRegistry()
 	}
+	
+	// If the config carries a manifest spec, apply its constraints
+	if cfg != nil && cfg.AgentSpec != nil {
+		// Apply tool matrix filtering (disable tools not in the matrix)
+		// Note: PermissionManager handles security (file access), 
+		// but this matrix handles logical capability (can I even see the tool?).
+		applyToolMatrix(a.Tools, cfg.AgentSpec.Tools)
+		
+		// If mode profiles are not yet customized, we can inject the mode from spec
+		// The AgentRuntimeSpec defines one primary mode, but CodingAgent supports many.
+		// We can override the 'default' mode profile with spec data.
+		if a.modeProfiles == nil {
+			a.modeProfiles = defaultModeProfiles()
+		}
+		// Update default mode profile to match spec
+		defProfile := a.modeProfiles[defaultMode]
+		// Map spec.Files to capabilities/restrictions if needed
+		// For now, we trust the PermissionManager for file path enforcement.
+		a.modeProfiles[defaultMode] = defProfile
+	}
+
 	if a.modeProfiles == nil {
 		a.modeProfiles = defaultModeProfiles()
 	}
@@ -37,6 +58,48 @@ func (a *CodingAgent) Initialize(cfg *framework.Config) error {
 		a.delegates = make(map[Mode]framework.Agent)
 	}
 	return nil
+}
+
+// applyToolMatrix disables tools in the registry that are explicitly turned off by the manifest.
+func applyToolMatrix(registry *framework.ToolRegistry, tools framework.AgentToolMatrix) {
+	// This is a coarse filter. We iterate through known tool categories.
+	// If a category is disabled, we remove those tools.
+	// Since tool registry doesn't index by capability, we have to inspect tools.
+	// For simplicity, we just pass the allowed list logic if we had one.
+	// But here we might just want to remove specific ones.
+	
+	// Actually, easier to just rely on PermissionManager for strictness? 
+	// No, the prompt should know what tools are available.
+	
+	// Map AgentToolMatrix to tool names/categories
+	// This mapping would need to be robust. For now, a simple heuristic:
+	if !tools.FileRead {
+		// Remove file reading tools
+		// registry.Remove("file_read") // ToolRegistry doesn't support Remove yet?
+		// We can use RestrictTo if we build the allowed list.
+	}
+	// Better approach: Build an allow-list based on the matrix.
+	var allowed []string
+	all := registry.All()
+	for _, t := range all {
+		keep := false
+		switch {
+		case strings.HasPrefix(t.Name(), "file_read"): keep = tools.FileRead
+		case strings.HasPrefix(t.Name(), "file_write"): keep = tools.FileWrite
+		case strings.HasPrefix(t.Name(), "file_edit"): keep = tools.FileEdit
+		case strings.HasPrefix(t.Name(), "file_"): keep = tools.FileRead // fallback for list/search
+		case strings.HasPrefix(t.Name(), "exec_"): keep = tools.BashExecute
+		case strings.HasPrefix(t.Name(), "git_"): keep = true // Git usually allowed if installed
+		case strings.HasPrefix(t.Name(), "lsp_"): keep = tools.LSPQuery
+		case strings.HasPrefix(t.Name(), "semantic_"): keep = tools.SearchCodebase
+		case strings.HasPrefix(t.Name(), "grep"): keep = tools.SearchCodebase
+		default: keep = true // Keep generic tools
+		}
+		if keep {
+			allowed = append(allowed, t.Name())
+		}
+	}
+	registry.RestrictTo(allowed)
 }
 
 // Capabilities aggregates capabilities from all modes.
