@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,15 +122,28 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		logFile.Close()
 		return nil, fmt.Errorf("ollama model not configured; update %s", cfg.ManifestPath)
 	}
+	
+	// Load all agent definitions from the agents directory
+	agentDefs, err := LoadAgentDefinitions(cfg.AgentsDir)
+	if err != nil && !os.IsNotExist(err) {
+		// Log warning but proceed with builtin agents
+		logger.Printf("warning: failed to load agent definitions: %v", err)
+	}
+
 	model := llm.NewClient(cfg.OllamaEndpoint, cfg.OllamaModel)
-	agent := instantiateAgent(cfg, model, registry, memory)
+	
+	// Create base config derived from manifest + CLI args
 	agentCfg := &framework.Config{
 		Name:              cfg.AgentLabel(),
 		Model:             cfg.OllamaModel,
 		OllamaEndpoint:    cfg.OllamaEndpoint,
 		MaxIterations:     8,
 		OllamaToolCalling: agentSpec.ToolCallingEnabled(),
+		AgentSpec:         agentSpec, // Default to manifest spec
 	}
+
+	agent := instantiateAgent(cfg, model, registry, memory, agentDefs, agentCfg)
+	
 	if err := agent.Initialize(agentCfg); err != nil {
 		logFile.Close()
 		return nil, fmt.Errorf("initialize agent: %w", err)
@@ -240,8 +254,55 @@ func BuildToolRegistry(workspace string, runner framework.CommandRunner) (*frame
 	return registry, nil
 }
 
+// LoadAgentDefinitions scans the directory for YAML files and parses them.
+func LoadAgentDefinitions(dir string) (map[string]*framework.AgentDefinition, error) {
+	defs := make(map[string]*framework.AgentDefinition)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".yaml") && !strings.HasSuffix(entry.Name(), ".yml")) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		def, err := framework.LoadAgentDefinition(path)
+		if err != nil {
+			return nil, fmt.Errorf("load %s: %w", entry.Name(), err)
+		}
+		if def.Name == "" {
+			def.Name = strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		}
+		defs[def.Name] = def
+	}
+	return defs, nil
+}
+
 // instantiateAgent picks the concrete agent implementation for the CLI preset.
-func instantiateAgent(cfg Config, model framework.LanguageModel, registry *framework.ToolRegistry, memory framework.MemoryStore) framework.Agent {
+func instantiateAgent(cfg Config, model framework.LanguageModel, registry *framework.ToolRegistry, memory framework.MemoryStore, defs map[string]*framework.AgentDefinition, agentCfg *framework.Config) framework.Agent {
+	// Check file-based definitions first
+	if def, ok := defs[cfg.AgentName]; ok {
+		// Update config with the definition's spec
+		agentCfg.AgentSpec = &def.Spec
+		agentCfg.OllamaToolCalling = def.Spec.ToolCallingEnabled()
+		if def.Spec.Model.Name != "" {
+			agentCfg.Model = def.Spec.Model.Name
+		}
+		
+		// Use the Implementation field to pick struct
+		switch def.Spec.Implementation {
+		case "planner":
+			return &agents.PlannerAgent{Model: model, Tools: registry, Memory: memory}
+		case "react":
+			return &agents.ReActAgent{Model: model, Tools: registry, Memory: memory}
+		// TODO: Add support for creating agents directly from 'def' struct fields (system prompt, etc)
+		// For now we map them to existing Go structs.
+		default:
+			// Fallback to ReAct if unspecified but defined
+			return &agents.ReActAgent{Model: model, Tools: registry, Memory: memory, Mode: string(def.Spec.Mode)}
+		}
+	}
+
 	switch cfg.AgentLabel() {
 	case "planner":
 		return &agents.PlannerAgent{Model: model, Tools: registry, Memory: memory}
@@ -278,11 +339,22 @@ func (r *Runtime) ExecuteInstruction(ctx context.Context, instruction string, ta
 	if taskType == "" {
 		taskType = framework.TaskTypeCodeModification
 	}
+	
+	metaStrings := make(map[string]string)
+	if metadata != nil {
+		for k, v := range metadata {
+			if s, ok := v.(string); ok {
+				metaStrings[k] = s
+			}
+		}
+	}
+
 	task := &framework.Task{
 		ID:          fmt.Sprintf("chat-%d", time.Now().UnixNano()),
 		Instruction: instruction,
 		Type:        taskType,
 		Context:     metadata,
+		Metadata:    metaStrings,
 	}
 	return r.RunTask(ctx, task)
 }
