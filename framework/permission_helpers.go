@@ -41,9 +41,7 @@ func computeWorkspaceScope(base string) string {
 	if clean == "." || clean == "" {
 		return "**"
 	}
-	if strings.HasSuffix(clean, "/") {
-		clean = strings.TrimSuffix(clean, "/")
-	}
+	clean = strings.TrimSuffix(clean, "/")
 	return clean + "/**"
 }
 
