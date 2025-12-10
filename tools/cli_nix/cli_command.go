@@ -17,6 +17,7 @@ type CommandToolConfig struct {
 	Category    string
 	DefaultArgs []string
 	Timeout     time.Duration
+	HITLRequired bool
 }
 
 // CommandTool executes a configured CLI binary with user-provided arguments.
@@ -104,6 +105,9 @@ func (t *CommandTool) IsAvailable(ctx context.Context, state *framework.Context)
 
 func (t *CommandTool) Permissions() framework.ToolPermissions {
 	perms := framework.NewExecutionPermissionSet(t.basePath, t.cfg.Command, append([]string{}, t.cfg.DefaultArgs...))
+	if t.cfg.HITLRequired && len(perms.Executables) > 0 {
+		perms.Executables[0].HITLRequired = true
+	}
 	return framework.ToolPermissions{Permissions: perms}
 }
 
