@@ -74,6 +74,7 @@ type Config struct {
 	DebugLLM           bool
 	DebugAgent         bool
 	AgentSpec          *AgentRuntimeSpec
+	Telemetry          Telemetry
 }
 
 // Result captures the result of a graph or agent execution. Creating a shared
