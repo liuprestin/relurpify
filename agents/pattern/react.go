@@ -9,8 +9,25 @@ import (
 	"strings"
 	"time"
 
+	agentctx "github.com/lexcodex/relurpify/agents/contextual"
 	"github.com/lexcodex/relurpify/framework"
 )
+
+// ReActAgent implements the Reason+Act pattern.
+// ModeRuntimeProfile conveys high-level runtime settings to the agent.
+type ModeRuntimeProfile struct {
+	Name        string
+	Description string
+	Temperature float64
+	Context     ContextPreferences
+}
+
+// ContextPreferences tune context management for a mode.
+type ContextPreferences struct {
+	PreferredDetailLevel agentctx.DetailLevel
+	MinHistorySize       int
+	CompressionThreshold float64
+}
 
 // ReActAgent implements the Reason+Act pattern.
 type ReActAgent struct {
@@ -22,6 +39,14 @@ type ReActAgent struct {
 	budget              *framework.ContextBudget
 	contextManager      *framework.ContextManager
 	compressionStrategy framework.CompressionStrategy
+
+	Mode            string
+	ModeProfile     ModeRuntimeProfile
+	contextStrategy agentctx.ContextStrategy
+	progressive     *agentctx.ProgressiveLoader
+	sharedContext   *framework.SharedContext
+	summarizer      framework.Summarizer
+	initialLoadDone bool
 }
 
 // Initialize wires configuration.
@@ -45,6 +70,37 @@ func (a *ReActAgent) Initialize(config *framework.Config) error {
 	if a.compressionStrategy == nil {
 		a.compressionStrategy = framework.NewSimpleCompressionStrategy()
 	}
+	if a.Mode == "" {
+		a.Mode = "code"
+	}
+	if a.ModeProfile.Name == "" {
+		a.ModeProfile = ModeRuntimeProfile{
+			Name:        a.Mode,
+			Description: "Reason + Act agent",
+			Temperature: 0.2,
+			Context: ContextPreferences{
+				PreferredDetailLevel: agentctx.DetailDetailed,
+				MinHistorySize:       5,
+				CompressionThreshold: 0.8,
+			},
+		}
+	}
+	if a.contextStrategy == nil {
+		switch strings.ToLower(a.Mode) {
+		case "debug", "ask":
+			a.contextStrategy = agentctx.NewAggressiveStrategy()
+		case "architect":
+			a.contextStrategy = agentctx.NewConservativeStrategy()
+		default:
+			a.contextStrategy = agentctx.NewAdaptiveStrategy()
+		}
+	}
+	if a.summarizer == nil {
+		a.summarizer = &framework.SimpleSummarizer{}
+	}
+	if a.progressive == nil {
+		a.progressive = agentctx.NewProgressiveLoader(a.contextManager, nil, nil, a.budget, a.summarizer)
+	}
 	return nil
 }
 
@@ -62,7 +118,21 @@ func (a *ReActAgent) Execute(ctx context.Context, task *framework.Task, state *f
 	if err != nil {
 		return nil, err
 	}
-	return graph.Execute(ctx, state)
+	a.initialLoadDone = false
+	a.sharedContext = framework.NewSharedContext(state, a.budget, a.summarizer)
+	if a.progressive != nil && a.contextStrategy != nil && task != nil {
+		if err := a.progressive.InitialLoad(task, a.contextStrategy); err != nil {
+			a.debugf("initial context load failed: %v", err)
+		} else {
+			a.initialLoadDone = true
+		}
+	}
+	defer func() {
+		a.sharedContext = nil
+		a.initialLoadDone = false
+	}()
+	result, err := graph.Execute(ctx, state)
+	return result, err
 }
 
 // Capabilities describes what the agent can do.
@@ -135,10 +205,32 @@ func (a *ReActAgent) enforceBudget(state *framework.Context) {
 	}
 	a.budget.UpdateUsage(state, tools)
 	budgetState := a.budget.CheckBudget()
-	if budgetState >= framework.BudgetNeedsCompression && a.compressionStrategy != nil && a.Model != nil {
-		if err := state.CompressHistory(a.compressionStrategy.KeepRecent(), a.Model, a.compressionStrategy); err != nil {
-			a.debugf("compression failed: %v", err)
-		} else {
+	if budgetState >= framework.BudgetNeedsCompression && a.Model != nil {
+		compressed := false
+		if a.sharedContext != nil && a.contextStrategy != nil && a.compressionStrategy != nil {
+			if a.contextStrategy.ShouldCompress(a.sharedContext) {
+				keep := a.ModeProfile.Context.MinHistorySize
+				if keep <= 0 {
+					keep = a.compressionStrategy.KeepRecent()
+				}
+				if keep <= 0 {
+					keep = 5
+				}
+				if err := a.sharedContext.CompressHistory(keep, a.Model, a.compressionStrategy); err != nil {
+					a.debugf("shared context compression failed: %v", err)
+				} else {
+					compressed = true
+				}
+			}
+		}
+		if !compressed && a.compressionStrategy != nil {
+			if err := state.CompressHistory(a.compressionStrategy.KeepRecent(), a.Model, a.compressionStrategy); err != nil {
+				a.debugf("compression failed: %v", err)
+			} else {
+				compressed = true
+			}
+		}
+		if compressed {
 			a.budget.UpdateUsage(state, tools)
 		}
 	}
@@ -171,6 +263,90 @@ func (a *ReActAgent) recordLatestInteraction(state *framework.Context) {
 	}
 }
 
+func (a *ReActAgent) manageContextSignals(state *framework.Context) {
+	if a.contextStrategy == nil {
+		return
+	}
+	lastResult := a.getLastResult(state)
+	if a.sharedContext != nil && a.progressive != nil && a.contextStrategy.ShouldExpandContext(a.sharedContext, lastResult) {
+		a.expandContextFromResult(lastResult)
+	}
+	if a.detectUncertainty(state) {
+		a.handleUncertainty(state)
+	}
+}
+
+func (a *ReActAgent) expandContextFromResult(result *framework.Result) {
+	if result == nil || result.Data == nil || a.progressive == nil {
+		return
+	}
+	if file, ok := result.Data["file"].(string); ok && file != "" {
+		_ = a.progressive.DrillDown(file)
+		return
+	}
+	if focus, ok := result.Data["focus_area"].(string); ok && focus != "" {
+		_ = a.progressive.LoadRelatedFiles(focus, 1)
+	}
+}
+
+func (a *ReActAgent) detectUncertainty(state *framework.Context) bool {
+	if state == nil {
+		return false
+	}
+	history := state.History()
+	if len(history) == 0 {
+		return false
+	}
+	last := history[len(history)-1]
+	content := strings.ToLower(last.Content)
+	markers := []string{
+		"not sure", "unclear", "need more information",
+		"cannot determine", "insufficient context", "missing information",
+	}
+	for _, marker := range markers {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *ReActAgent) handleUncertainty(state *framework.Context) {
+	if state == nil || a.progressive == nil {
+		return
+	}
+	history := state.History()
+	if len(history) == 0 {
+		return
+	}
+	last := history[len(history)-1]
+	for _, file := range agentctx.ExtractFileReferences(last.Content) {
+		_ = a.progressive.ExpandContext(file, agentctx.DetailDetailed)
+	}
+	if len(agentctx.ExtractSymbolReferences(last.Content)) > 0 {
+		request := &agentctx.ContextRequest{
+			ASTQueries: []agentctx.ASTQuery{
+				{Type: agentctx.ASTQueryListSymbols},
+			},
+		}
+		_ = a.progressive.ExecuteContextRequest(request, "symbol_lookup")
+	}
+}
+
+func (a *ReActAgent) getLastResult(state *framework.Context) *framework.Result {
+	if state == nil {
+		return nil
+	}
+	val, ok := state.Get("react.last_result")
+	if !ok {
+		return nil
+	}
+	if res, ok := val.(*framework.Result); ok {
+		return res
+	}
+	return nil
+}
+
 // --- ReAct Graph nodes ---
 
 type reactThinkNode struct {
@@ -190,6 +366,7 @@ func (n *reactThinkNode) Type() framework.NodeType { return framework.NodeTypeOb
 func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("planning")
 	n.agent.enforceBudget(state)
+	n.agent.manageContextSignals(state)
 	var resp *framework.LLMResponse
 	var err error
 	tools := n.agent.Tools.All()
@@ -343,7 +520,9 @@ func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*
 			}
 			state.Set("react.last_tool_result", results)
 			state.Set("react.tool_calls", []framework.ToolCall{})
-			return &framework.Result{NodeID: n.id, Success: true, Data: results}, nil
+			result := &framework.Result{NodeID: n.id, Success: true, Data: results}
+			state.Set("react.last_result", result)
+			return result, nil
 		}
 	}
 	val, ok := state.Get("react.decision")
@@ -353,7 +532,9 @@ func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*
 	decision := val.(decisionPayload)
 	if decision.Complete || decision.Tool == "" || decision.Tool == "none" {
 		state.Set("react.last_tool_result", map[string]interface{}{})
-		return &framework.Result{NodeID: n.id, Success: true}, nil
+		result := &framework.Result{NodeID: n.id, Success: true}
+		state.Set("react.last_result", result)
+		return result, nil
 	}
 	tool, ok := n.agent.Tools.Get(decision.Tool)
 	if !ok {
@@ -365,12 +546,14 @@ func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*
 	}
 	state.Set("react.last_tool_result", res.Data)
 	n.agent.debugf("%s tool=%s result=%v", n.id, decision.Tool, res.Data)
-	return &framework.Result{
+	result := &framework.Result{
 		NodeID:  n.id,
 		Success: res.Success,
 		Data:    res.Data,
 		Error:   parseError(res.Error),
-	}, nil
+	}
+	state.Set("react.last_result", result)
+	return result, nil
 }
 
 type reactObserveNode struct {
@@ -430,14 +613,16 @@ func (n *reactObserveNode) Execute(ctx context.Context, state *framework.Context
 		})
 	}
 	n.agent.debugf("%s completed=%v diagnostic=%s", n.id, completed, diagnostic.String())
-	return &framework.Result{
+	result := &framework.Result{
 		NodeID:  n.id,
 		Success: true,
 		Data: map[string]interface{}{
 			"diagnostic": diagnostic.String(),
 			"complete":   completed,
 		},
-	}, nil
+	}
+	state.Set("react.last_result", result)
+	return result, nil
 }
 
 // decisionPayload models the JSON output of the think step.
