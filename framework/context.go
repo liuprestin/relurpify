@@ -472,6 +472,3 @@ type CompressionStats struct {
 	CurrentHistorySize          int
 	CompressedChunks            int
 }
-
-// SharedContext aliases Context for backwards compatibility with the spec naming.
-type SharedContext = Context
