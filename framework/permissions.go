@@ -237,9 +237,7 @@ func expandWorkspacePlaceholder(workspace, pattern string) string {
 	if workspace == "" {
 		return filepath.ToSlash(resolved)
 	}
-	if strings.HasPrefix(resolved, "./") {
-		resolved = strings.TrimPrefix(resolved, "./")
-	}
+	resolved = strings.TrimPrefix(resolved, "./")
 	return filepath.ToSlash(filepath.Join(workspace, resolved))
 }
 
