@@ -153,27 +153,6 @@ func (s *SimpleCompressionStrategy) parseCompressionResponse(response string, in
 	}, nil
 }
 
-func estimateTokens(v interface{}) int {
-	switch val := v.(type) {
-	case string:
-		return len(val) / 4
-	case []Interaction:
-		total := 0
-		for _, i := range val {
-			total += len(i.Content) / 4
-		}
-		return total
-	case []KeyFact:
-		total := 0
-		for _, kf := range val {
-			total += len(kf.Content) / 4
-		}
-		return total
-	default:
-		return 0
-	}
-}
-
 func truncate(value string, maxLen int) string {
 	if len(value) <= maxLen {
 		return value
