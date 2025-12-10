@@ -19,6 +19,7 @@ type Config struct {
 	AgentsDir      string
 	MemoryPath     string
 	LogPath        string
+	TelemetryPath  string
 	ConfigPath     string
 	OllamaEndpoint string
 	OllamaModel    string
@@ -38,14 +39,15 @@ func DefaultConfig() Config {
 	}
 	cfgDir := filepath.Join(cwd, "relurpify_cfg")
 	return Config{
-		Workspace:    cwd,
-		ManifestPath: filepath.Join(cfgDir, "agent.manifest.yaml"),
-		AgentsDir:    filepath.Join(cfgDir, "agents"),
-		MemoryPath:   filepath.Join(cwd, ".relurpish", "memory"),
-		LogPath:      filepath.Join(cwd, ".relurpish", "relurpish.log"),
-		ConfigPath:   filepath.Join(cfgDir, "config.yaml"),
-		ServerAddr:   ":8080",
-		AuditLimit:   512,
+		Workspace:     cwd,
+		ManifestPath:  filepath.Join(cfgDir, "agent.manifest.yaml"),
+		AgentsDir:     filepath.Join(cfgDir, "agents"),
+		MemoryPath:    filepath.Join(cwd, ".relurpish", "memory"),
+		LogPath:       filepath.Join(cwd, ".relurpish", "relurpish.log"),
+		TelemetryPath: filepath.Join(cfgDir, "telemetry.jsonl"),
+		ConfigPath:    filepath.Join(cfgDir, "config.yaml"),
+		ServerAddr:    ":8080",
+		AuditLimit:    512,
 		HITLTimeout:  45 * time.Second,
 		Sandbox: framework.SandboxConfig{
 			RunscPath:        "runsc",
@@ -92,6 +94,12 @@ func (c *Config) Normalize() error {
 	}
 	if !filepath.IsAbs(c.LogPath) {
 		c.LogPath = filepath.Join(c.Workspace, c.LogPath)
+	}
+	if c.TelemetryPath == "" {
+		c.TelemetryPath = filepath.Join(c.Workspace, ".relurpish", "telemetry.jsonl")
+	}
+	if !filepath.IsAbs(c.TelemetryPath) {
+		c.TelemetryPath = filepath.Join(c.Workspace, c.TelemetryPath)
 	}
 	if c.ConfigPath == "" {
 		c.ConfigPath = filepath.Join(configDir, "agent.manifest.yaml")
