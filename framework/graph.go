@@ -281,7 +281,7 @@ func (g *Graph) maybeCheckpoint(taskID, currentNode string, state *Context) {
 	if g.checkpointInterval == 0 || g.checkpointCallback == nil {
 		return
 	}
-	if !g.shouldCheckpoint(currentNode) {
+	if !g.shouldCheckpoint() {
 		return
 	}
 	checkpoint, err := g.CreateCheckpoint(taskID, currentNode, state)
@@ -308,7 +308,7 @@ func (g *Graph) maybeCheckpoint(taskID, currentNode string, state *Context) {
 	g.lastCheckpointNode = currentNode
 }
 
-func (g *Graph) shouldCheckpoint(currentNode string) bool {
+func (g *Graph) shouldCheckpoint() bool {
 	if g.checkpointInterval == 0 {
 		return false
 	}
