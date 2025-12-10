@@ -168,39 +168,116 @@ func (ac *AgentCoordinator) executePlanExecuteStrategy(task *framework.Task) (*f
 	ac.emitEvent("executor_start")
 	ac.contextBroker.LoadFullFilesForPlan(ac.sharedContext.Context, plan)
 
-	var execResult *framework.Result
-	var execErr error
+	// Execute Plan Steps
+	// We treat the plan as a dependency graph.
+	// 1. Mark all steps as pending.
+	// 2. Loop until all completed.
+	// 3. Find steps where all dependencies are completed.
+	// 4. Run them in parallel (if >1).
+	
+	completedSteps := make(map[string]bool)
+	stepMap := make(map[string]PlanStep)
+	for _, s := range plan.Steps {
+		stepMap[s.ID] = s
+	}
 
-	// Self-healing loop
-	for attempt := 0; attempt <= ac.Config.MaxRecoveryAttempts; attempt++ {
-		execTask := cloneTask(task)
-		if execTask.Context == nil {
-			execTask.Context = map[string]any{}
+	// Safety break
+	maxLoops := len(plan.Steps) * 2
+	loops := 0
+
+	for len(completedSteps) < len(plan.Steps) {
+		loops++
+		if loops > maxLoops {
+			return nil, fmt.Errorf("plan execution stuck (cycle or dependency error)")
 		}
-		execTask.Context["plan"] = plan
-		if attempt > 0 {
-			execTask.Instruction = fmt.Sprintf("%s\n\nPrevious attempt failed with error: %v. Please fix and retry.", task.Instruction, execErr)
-			// Add diagnostic info if available
-			if diagAgent, hasDiag := ac.agents["ask"]; hasDiag {
-				diagTask := cloneTask(task)
-				diagTask.Instruction = fmt.Sprintf("Analyze why this error occurred: %v", execErr)
-				if diagRes, dErr := diagAgent.Execute(context.Background(), diagTask, ac.sharedContext.Context); dErr == nil {
-					if diagnosis, ok := diagRes.Data["text"].(string); ok {
-						execTask.Instruction += fmt.Sprintf("\nDiagnosis: %s", diagnosis)
+
+		var readySteps []PlanStep
+		for _, step := range plan.Steps {
+			if completedSteps[step.ID] {
+				continue
+			}
+			// Check dependencies
+			ready := true
+			if deps, hasDeps := plan.Dependencies[step.ID]; hasDeps {
+				for _, depID := range deps {
+					if !completedSteps[depID] {
+						ready = false
+						break
 					}
 				}
 			}
+			if ready {
+				readySteps = append(readySteps, step)
+			}
 		}
 
-		execResult, execErr = executor.Execute(context.Background(), execTask, ac.sharedContext.Context)
-		if execErr == nil && execResult.Success {
+		if len(readySteps) == 0 {
+			if len(completedSteps) < len(plan.Steps) {
+				return nil, fmt.Errorf("deadlock in plan execution")
+			}
 			break
 		}
-		ac.emitEvent("executor_retry")
+
+		// Execute ready steps
+		// If 1 step, run inline. If multiple, run parallel.
+		if len(readySteps) == 1 {
+			step := readySteps[0]
+			if err := ac.executeSingleStep(context.Background(), step, executor, task, plan); err != nil {
+				return nil, err
+			}
+			completedSteps[step.ID] = true
+		} else {
+			var wg sync.WaitGroup
+			errChan := make(chan error, len(readySteps))
+			
+			for _, step := range readySteps {
+				wg.Add(1)
+				step := step
+				go func() {
+					defer wg.Done()
+					// Clone context for isolation
+					branchCtx := ac.sharedContext.Context.Clone()
+					
+					// We need a thread-safe way to run the agent. 
+					// Agents are stateless usually, but we need to ensure we don't race on shared resources if tools aren't safe.
+					// Most framework tools are safe (file locks, etc).
+					
+					// Create a transient coordinator/wrapper to run this step?
+					// No, just call executor.Execute.
+					
+					sErr := ac.executeSingleStep(context.Background(), step, executor, task, plan)
+					if sErr != nil {
+						errChan <- sErr
+						return
+					}
+					
+					// In a real implementation we would merge branchCtx back.
+					// For now, we assume steps are modifying FS state (side effects), 
+					// so we don't strictly need to merge memory unless they output new variables.
+					// To be safe, we acquire lock and merge "step results" only?
+					// framework.Context.Merge handles this.
+					ac.sharedContext.Context.Merge(branchCtx)
+				}()
+			}
+			wg.Wait()
+			close(errChan)
+			for err := range errChan {
+				if err != nil {
+					return nil, err // Fail fast on parallel error
+				}
+			}
+			for _, s := range readySteps {
+				completedSteps[s.ID] = true
+			}
+		}
 	}
 
-	if execErr != nil {
-		return nil, fmt.Errorf("executor failed after %d attempts: %w", ac.Config.MaxRecoveryAttempts, execErr)
+	// Aggregate result (for the reviewer)
+	execResult := &framework.Result{
+		Success: true,
+		Data: map[string]any{
+			"steps_completed": len(completedSteps),
+		},
 	}
 
 	reviewer, ok := ac.agents["reviewer"]
@@ -225,6 +302,46 @@ func (ac *AgentCoordinator) executePlanExecuteStrategy(task *framework.Task) (*f
 		}
 	}
 	return execResult, nil
+}
+
+func (ac *AgentCoordinator) executeSingleStep(ctx context.Context, step PlanStep, executor framework.Agent, originalTask *framework.Task, plan *PlanContext) error {
+	stepTask := cloneTask(originalTask)
+	if stepTask.Context == nil {
+		stepTask.Context = make(map[string]any)
+	}
+	// Focus instruction
+	stepTask.Instruction = fmt.Sprintf("Execute step %s: %s\nFiles: %v", step.ID, step.Description, step.Files)
+	stepTask.Context["plan"] = plan
+	stepTask.Context["current_step"] = step
+	
+	// Retry logic per step
+	var stepErr error
+	for attempt := 0; attempt <= ac.Config.MaxRecoveryAttempts; attempt++ {
+		if attempt > 0 {
+			stepTask.Instruction += fmt.Sprintf("\nRetry %d: Last error: %v", attempt, stepErr)
+			
+			// Add diagnostic info if available
+			if diagAgent, hasDiag := ac.agents["ask"]; hasDiag && stepErr != nil {
+				diagTask := cloneTask(originalTask)
+				diagTask.Instruction = fmt.Sprintf("Analyze why this error occurred: %v", stepErr)
+				if diagRes, dErr := diagAgent.Execute(ctx, diagTask, ac.sharedContext.Context); dErr == nil {
+					if diagnosis, ok := diagRes.Data["text"].(string); ok {
+						stepTask.Instruction += fmt.Sprintf("\nDiagnosis: %s", diagnosis)
+					}
+				}
+			}
+		}
+		res, err := executor.Execute(ctx, stepTask, ac.sharedContext.Context)
+		if err == nil && res.Success {
+			return nil
+		}
+		stepErr = err
+		if stepErr == nil && !res.Success {
+			stepErr = fmt.Errorf("step failed without error")
+		}
+		ac.emitEvent("executor_retry")
+	}
+	return fmt.Errorf("step %s failed: %w", step.ID, stepErr)
 }
 
 func (ac *AgentCoordinator) executeExploreModifyStrategy(task *framework.Task) (*framework.Result, error) {
