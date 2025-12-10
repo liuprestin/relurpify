@@ -130,6 +130,21 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		logger.Printf("warning: failed to load agent definitions: %v", err)
 	}
 
+	// Setup Telemetry
+	var sinks []framework.Telemetry
+	sinks = append(sinks, framework.LoggerTelemetry{Logger: logger})
+	
+	if cfg.TelemetryPath != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.TelemetryPath), 0o755); err == nil {
+			if fileSink, err := framework.NewJSONFileTelemetry(cfg.TelemetryPath); err == nil {
+				sinks = append(sinks, fileSink)
+			} else {
+				logger.Printf("warning: failed to init json telemetry: %v", err)
+			}
+		}
+	}
+	telemetry := framework.MultiplexTelemetry{Sinks: sinks}
+
 	model := llm.NewClient(cfg.OllamaEndpoint, cfg.OllamaModel)
 	
 	// Create base config derived from manifest + CLI args
@@ -140,6 +155,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		MaxIterations:     8,
 		OllamaToolCalling: agentSpec.ToolCallingEnabled(),
 		AgentSpec:         agentSpec, // Default to manifest spec
+		Telemetry:         telemetry,
 	}
 
 	agent := instantiateAgent(cfg, model, registry, memory, agentDefs, agentCfg)
@@ -295,6 +311,8 @@ func instantiateAgent(cfg Config, model framework.LanguageModel, registry *frame
 			return &agents.PlannerAgent{Model: model, Tools: registry, Memory: memory}
 		case "react":
 			return &agents.ReActAgent{Model: model, Tools: registry, Memory: memory}
+		case "eternal":
+			return &agents.EternalAgent{Model: model}
 		// TODO: Add support for creating agents directly from 'def' struct fields (system prompt, etc)
 		// For now we map them to existing Go structs.
 		default:
