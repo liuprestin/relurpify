@@ -1,6 +1,9 @@
 package framework
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // ContextItem represents a unit that can be managed for budget purposes.
 type ContextItem interface {
@@ -119,4 +122,62 @@ func (fci *FileContextItem) Type() ContextItemType {
 
 func (fci *FileContextItem) Age() time.Duration {
 	return time.Since(fci.LastAccessed)
+}
+
+// ToolResultContextItem represents structured tool outputs inside context.
+type ToolResultContextItem struct {
+	ToolName     string
+	Result       *ToolResult
+	LastAccessed time.Time
+	Relevance    float64
+	PriorityVal  int
+}
+
+func (tr *ToolResultContextItem) tokenPayload() string {
+	if tr == nil || tr.Result == nil {
+		return ""
+	}
+	if len(tr.Result.Data) == 0 {
+		return tr.Result.Error
+	}
+	return fmt.Sprintf("%v", tr.Result.Data)
+}
+
+func (tr *ToolResultContextItem) TokenCount() int {
+	return estimateTokens(tr.tokenPayload())
+}
+
+func (tr *ToolResultContextItem) RelevanceScore() float64 {
+	if tr.Relevance == 0 {
+		tr.Relevance = 0.8
+	}
+	age := time.Since(tr.LastAccessed)
+	decay := 1.0 / (1.0 + age.Hours()/12.0)
+	return tr.Relevance * decay
+}
+
+func (tr *ToolResultContextItem) Priority() int {
+	return tr.PriorityVal
+}
+
+func (tr *ToolResultContextItem) Compress() (ContextItem, error) {
+	payload := tr.tokenPayload()
+	if len(payload) > 250 {
+		payload = payload[:250] + "..."
+	}
+	return &ToolResultContextItem{
+		ToolName:     tr.ToolName,
+		Result:       &ToolResult{Success: tr.Result.Success, Data: map[string]interface{}{"summary": payload}},
+		LastAccessed: tr.LastAccessed,
+		Relevance:    tr.Relevance * 0.9,
+		PriorityVal:  tr.PriorityVal + 1,
+	}, nil
+}
+
+func (tr *ToolResultContextItem) Type() ContextItemType {
+	return ContextTypeToolResult
+}
+
+func (tr *ToolResultContextItem) Age() time.Duration {
+	return time.Since(tr.LastAccessed)
 }
