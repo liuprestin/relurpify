@@ -137,3 +137,68 @@ func newTestManager(t *testing.T, base string, perms *PermissionSet) *Permission
 	require.NoError(t, err)
 	return manager
 }
+
+func TestPermissionManagerHITLFlow(t *testing.T) {
+	ctx := context.Background()
+	hitl := &stubHITLProvider{
+		grants: []*PermissionGrant{{
+			ID: "grant-1",
+			Permission: PermissionDescriptor{
+				Type:     PermissionTypeFilesystem,
+				Action:   string(FileSystemRead),
+				Resource: "/workspace/file.txt",
+			},
+			Scope: GrantScopeSession,
+		}},
+	}
+	perms := &PermissionSet{
+		FileSystem: []FileSystemPermission{{
+			Action:       FileSystemRead,
+			Path:         "/workspace/**",
+			HITLRequired: true,
+		}},
+	}
+	manager, err := NewPermissionManager("/workspace", perms, nil, hitl)
+	require.NoError(t, err)
+
+	require.NoError(t, manager.CheckFileAccess(ctx, "agent-hitl", FileSystemRead, "file.txt"))
+	require.Len(t, hitl.requests, 1, "expected HITL approval request")
+
+	require.NoError(t, manager.CheckFileAccess(ctx, "agent-hitl", FileSystemRead, "file.txt"))
+	require.Len(t, hitl.requests, 1, "cached grant should avoid duplicate HITL calls")
+}
+
+func TestPermissionManagerCapabilityCheck(t *testing.T) {
+	ctx := context.Background()
+	manager := newTestManager(t, "/workspace", &PermissionSet{
+		FileSystem: []FileSystemPermission{
+			{Action: FileSystemRead, Path: "/workspace/**"},
+		},
+		Capabilities: []CapabilityPermission{
+			{Capability: "NET_ADMIN"},
+		},
+	})
+
+	require.NoError(t, manager.CheckCapability(ctx, "agent", "NET_ADMIN"))
+	require.Error(t, manager.CheckCapability(ctx, "agent", "SYS_PTRACE"))
+}
+
+type stubHITLProvider struct {
+	grants   []*PermissionGrant
+	requests []PermissionRequest
+}
+
+func (s *stubHITLProvider) RequestPermission(ctx context.Context, req PermissionRequest) (*PermissionGrant, error) {
+	s.requests = append(s.requests, req)
+	var grant *PermissionGrant
+	if len(s.grants) > 0 {
+		grant = s.grants[0]
+		s.grants = s.grants[1:]
+	} else {
+		grant = &PermissionGrant{}
+	}
+	if grant.Permission.Action == "" {
+		grant.Permission = req.Permission
+	}
+	return grant, nil
+}
