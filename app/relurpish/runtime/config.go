@@ -16,6 +16,7 @@ import (
 type Config struct {
 	Workspace      string
 	ManifestPath   string
+	AgentsDir      string
 	MemoryPath     string
 	LogPath        string
 	ConfigPath     string
@@ -39,6 +40,7 @@ func DefaultConfig() Config {
 	return Config{
 		Workspace:    cwd,
 		ManifestPath: filepath.Join(cfgDir, "agent.manifest.yaml"),
+		AgentsDir:    filepath.Join(cfgDir, "agents"),
 		MemoryPath:   filepath.Join(cwd, ".relurpish", "memory"),
 		LogPath:      filepath.Join(cwd, ".relurpish", "relurpish.log"),
 		ConfigPath:   filepath.Join(cfgDir, "config.yaml"),
@@ -72,6 +74,12 @@ func (c *Config) Normalize() error {
 	}
 	if !filepath.IsAbs(c.ManifestPath) {
 		c.ManifestPath = filepath.Join(c.Workspace, c.ManifestPath)
+	}
+	if c.AgentsDir == "" {
+		c.AgentsDir = filepath.Join(configDir, "agents")
+	}
+	if !filepath.IsAbs(c.AgentsDir) {
+		c.AgentsDir = filepath.Join(c.Workspace, c.AgentsDir)
 	}
 	if c.MemoryPath == "" {
 		c.MemoryPath = filepath.Join(c.Workspace, ".relurpish", "memory")
