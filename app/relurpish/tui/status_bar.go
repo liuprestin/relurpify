@@ -14,17 +14,22 @@ type StatusBar struct {
 	model      string
 	agent      string
 	mode       string
+	strategy   string
 	tokens     int
 	duration   time.Duration
 	lastUpdate time.Time
 }
 
 func (s StatusBar) View(width int) string {
+	modeStr := s.mode
+	if s.strategy != "" {
+		modeStr = fmt.Sprintf("%s (%s)", s.mode, s.strategy)
+	}
 	left := fmt.Sprintf("📁 %s | 🤖 %s | 👤 %s | 🔧 %s",
 		truncate(s.workspace, 20),
 		s.model,
 		s.agent,
-		s.mode,
+		modeStr,
 	)
 	right := fmt.Sprintf("🪙 %s | ⏱️  %s",
 		formatTokens(s.tokens),
