@@ -418,12 +418,33 @@ func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) 
 		state.Set("react.tool_calls", []framework.ToolCall{})
 	} else {
 		parsed, err := parseDecision(resp.Text)
-		if err != nil {
-			decision = decisionPayload{Thought: resp.Text, Complete: true}
+		
+		// Fallback: Check if the framework helper finds distinct tool calls (e.g. in markdown blocks)
+		// even if the single-object parser failed or found nothing.
+		detectedCalls := framework.ParseToolCallsFromText(resp.Text)
+		
+		if len(detectedCalls) > 0 {
+			// Found tools via text parsing
+			state.Set("react.tool_calls", detectedCalls)
+			
+			// Use thought from parsed if available, else full text
+			thought := parsed.Thought
+			if thought == "" {
+				thought = resp.Text
+			}
+			decision = decisionPayload{
+				Thought:   thought,
+				Complete:  false,
+				Timestamp: time.Now().UTC(),
+			}
 		} else {
-			decision = parsed
+			if err != nil {
+				decision = decisionPayload{Thought: resp.Text, Complete: true}
+			} else {
+				decision = parsed
+			}
+			state.Set("react.tool_calls", []framework.ToolCall{})
 		}
-		state.Set("react.tool_calls", []framework.ToolCall{})
 	}
 	state.Set("react.decision", decision)
 	n.agent.debugf("%s decision=%+v tool_calls=%d", n.id, decision, len(resp.ToolCalls))
@@ -439,11 +460,8 @@ func (n *reactThinkNode) Execute(ctx context.Context, state *framework.Context) 
 // buildPrompt returns a textual prompt when tool-calling chat APIs are not
 // available.
 func (n *reactThinkNode) buildPrompt(state *framework.Context) string {
-	var tools []string
 	var hasLSP, hasAST bool
 	for _, tool := range n.agent.Tools.All() {
-		toolLine := fmt.Sprintf("%s: %s", tool.Name(), tool.Description())
-		tools = append(tools, toolLine)
 		if strings.HasPrefix(tool.Name(), "lsp_") {
 			hasLSP = true
 		}
@@ -455,6 +473,8 @@ func (n *reactThinkNode) buildPrompt(state *framework.Context) string {
 	if res, ok := state.Get("react.last_tool_result"); ok {
 		last = fmt.Sprint(res)
 	}
+
+	toolSection := framework.RenderToolsToPrompt(n.agent.Tools.All())
 
 	var guidance strings.Builder
 	if hasLSP || hasAST {
@@ -475,11 +495,10 @@ func (n *reactThinkNode) buildPrompt(state *framework.Context) string {
 	}
 
 	return fmt.Sprintf(`You are a ReAct agent tasked with "%s".
-You can call functions using the provided tools. If you need a tool, emit a tool call. If you are done, provide the final answer text without tool calls or return the JSON object: {"thought": "...", "tool": "tool_name or none", "arguments": {...}, "complete": bool}
-Available tools:
 %s
 %s
-Recent tool results: %s`, n.task.Instruction, strings.Join(tools, "\n"), guidance.String(), last)
+Recent tool results: %s
+Provide your response as a JSON object with "thought" and "tool"/"arguments" fields (or "complete": true).`, n.task.Instruction, toolSection, guidance.String(), last)
 }
 
 // ensureMessages seeds the chat history when tool calling is enabled so each
