@@ -24,8 +24,9 @@ func (m Model) renderMessages() string {
 		return welcomeStyle.Render("Welcome! Type a message or use /help for commands.")
 	}
 	rendered := make([]string, 0, len(m.messages))
+	spinnerView := m.spinner.View()
 	for _, msg := range m.messages {
-		rendered = append(rendered, RenderMessage(msg, m.width))
+		rendered = append(rendered, RenderMessage(msg, m.width, spinnerView))
 	}
 	return strings.Join(rendered, "\n\n")
 }
