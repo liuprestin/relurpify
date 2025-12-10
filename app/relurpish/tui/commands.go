@@ -79,6 +79,20 @@ func init() {
 		Usage:       "/hitl",
 		Handler:     handleHITL,
 	})
+	registerCommand(Command{
+		Name:        "mode",
+		Aliases:     []string{"m"},
+		Description: "Set agent mode (architect, ask, code)",
+		Usage:       "/mode <mode>",
+		Handler:     handleMode,
+	})
+	registerCommand(Command{
+		Name:        "strategy",
+		Aliases:     []string{"s", "strat"},
+		Description: "Set execution strategy (plan_execute, review_iterate, single_agent)",
+		Usage:       "/strategy <strategy>",
+		Handler:     handleStrategy,
+	})
 }
 
 func registerCommand(cmd Command) {
@@ -219,4 +233,28 @@ func handleReject(m Model, args []string) (Model, tea.Cmd) {
 
 func handleHITL(m Model, args []string) (Model, tea.Cmd) {
 	return m, summarizePendingHITL(m.runtime)
+}
+
+func handleMode(m Model, args []string) (Model, tea.Cmd) {
+	if len(args) == 0 {
+		if m.session.Mode == "" {
+			return m.addSystemMessage("Current mode: (default)"), nil
+		}
+		return m.addSystemMessage(fmt.Sprintf("Current mode: %s", m.session.Mode)), nil
+	}
+	m.session.Mode = args[0]
+	m.statusBar.mode = args[0]
+	return m.addSystemMessage(fmt.Sprintf("Set mode to: %s", args[0])), nil
+}
+
+func handleStrategy(m Model, args []string) (Model, tea.Cmd) {
+	if len(args) == 0 {
+		if m.session.Strategy == "" {
+			return m.addSystemMessage("Current strategy: (auto-detect)"), nil
+		}
+		return m.addSystemMessage(fmt.Sprintf("Current strategy: %s", m.session.Strategy)), nil
+	}
+	m.session.Strategy = args[0]
+	m.statusBar.strategy = args[0]
+	return m.addSystemMessage(fmt.Sprintf("Set strategy to: %s", args[0])), nil
 }
