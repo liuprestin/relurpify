@@ -137,11 +137,29 @@ func (a *CodingAgent) delegateForMode(mode Mode) (framework.Agent, error) {
 	case ModeArchitect:
 		agent = &PlannerAgent{Model: a.Model, Tools: a.scopedTools(profile.ToolScope), Memory: a.Memory}
 	case ModeAsk:
-		agent = &ReActAgent{Model: a.Model, Tools: a.scopedTools(profile.ToolScope), Memory: a.Memory}
+		agent = &ReActAgent{
+			Model:       a.Model,
+			Tools:       a.scopedTools(profile.ToolScope),
+			Memory:      a.Memory,
+			Mode:        string(profile.Name),
+			ModeProfile: convertModeRuntimeProfile(profile),
+		}
 	case ModeDocument:
-		agent = &ReActAgent{Model: a.Model, Tools: a.scopedTools(profile.ToolScope), Memory: a.Memory}
+		agent = &ReActAgent{
+			Model:       a.Model,
+			Tools:       a.scopedTools(profile.ToolScope),
+			Memory:      a.Memory,
+			Mode:        string(profile.Name),
+			ModeProfile: convertModeRuntimeProfile(profile),
+		}
 	default:
-		agent = &ReActAgent{Model: a.Model, Tools: a.scopedTools(profile.ToolScope), Memory: a.Memory}
+		agent = &ReActAgent{
+			Model:       a.Model,
+			Tools:       a.scopedTools(profile.ToolScope),
+			Memory:      a.Memory,
+			Mode:        string(profile.Name),
+			ModeProfile: convertModeRuntimeProfile(profile),
+		}
 	}
 	if err := agent.Initialize(a.Config); err != nil {
 		return nil, err
@@ -207,6 +225,20 @@ func (a *CodingAgent) decorateInstruction(profile ModeProfile, instruction strin
 	}
 	fmt.Fprintf(builder, "\n%s", instruction)
 	return builder.String()
+}
+
+func convertModeRuntimeProfile(profile ModeProfile) ModeRuntimeProfile {
+	contextPrefs := ContextPreferences{
+		PreferredDetailLevel: profile.ContextProfile.PreferredDetailLevel,
+		MinHistorySize:       profile.ContextProfile.MinHistorySize,
+		CompressionThreshold: profile.ContextProfile.CompressionThreshold,
+	}
+	return ModeRuntimeProfile{
+		Name:        string(profile.Name),
+		Description: profile.Description,
+		Temperature: profile.Temperature,
+		Context:     contextPrefs,
+	}
 }
 
 // cloneContext performs a shallow copy of the task context map to avoid
