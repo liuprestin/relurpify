@@ -110,6 +110,7 @@ func (m *AgentManifest) Validate() error {
 // manifest. These fields are optional from the sandbox point of view but
 // provide the additional metadata needed by the orchestrator.
 type AgentRuntimeSpec struct {
+	Implementation    string               `yaml:"implementation" json:"implementation"` // e.g. "react", "planner", "coding"
 	Mode              AgentMode            `yaml:"mode" json:"mode"`
 	Version           string               `yaml:"version,omitempty" json:"version,omitempty"`
 	Prompt            string               `yaml:"prompt,omitempty" json:"prompt,omitempty"`
@@ -119,9 +120,25 @@ type AgentRuntimeSpec struct {
 	Files             AgentFileMatrix      `yaml:"file_permissions,omitempty" json:"file_permissions,omitempty"`
 	Invocation        AgentInvocationSpec  `yaml:"invocation,omitempty" json:"invocation,omitempty"`
 	Context           AgentContextSpec     `yaml:"context,omitempty" json:"context,omitempty"`
+	LSP               AgentLSPSpec         `yaml:"lsp,omitempty" json:"lsp,omitempty"`
+	Search            AgentSearchSpec      `yaml:"search,omitempty" json:"search,omitempty"`
 	Metadata          AgentMetadata        `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 	OllamaToolCalling *bool                `yaml:"ollama_tool_calling,omitempty" json:"ollama_tool_calling,omitempty"`
 	Logging           *AgentLoggingSpec    `yaml:"logging,omitempty" json:"logging,omitempty"`
+}
+
+// AgentLSPSpec configures Language Server Protocol features.
+type AgentLSPSpec struct {
+	Servers map[string]string `yaml:"servers" json:"servers"` // "go": "gopls", "python": "pyright"
+	Enabled bool              `yaml:"enabled" json:"enabled"`
+	Timeout string            `yaml:"timeout" json:"timeout"`
+}
+
+// AgentSearchSpec configures search/indexing capabilities.
+type AgentSearchSpec struct {
+	HybridEnabled bool `yaml:"hybrid_enabled" json:"hybrid_enabled"` // Use both vector and AST
+	VectorIndex   bool `yaml:"vector_index" json:"vector_index"`
+	ASTIndex      bool `yaml:"ast_index" json:"ast_index"`
 }
 
 // ToolCallingEnabled reports whether Ollama tool calling should be used.
@@ -197,10 +214,12 @@ type AgentInvocationSpec struct {
 
 // AgentContextSpec limits context window.
 type AgentContextSpec struct {
-	MaxFiles            int  `yaml:"max_files" json:"max_files"`
-	MaxTokens           int  `yaml:"max_tokens" json:"max_tokens"`
-	IncludeGitHistory   bool `yaml:"include_git_history" json:"include_git_history"`
-	IncludeDependencies bool `yaml:"include_dependencies" json:"include_dependencies"`
+	MaxFiles            int    `yaml:"max_files" json:"max_files"`
+	MaxTokens           int    `yaml:"max_tokens" json:"max_tokens"`
+	IncludeGitHistory   bool   `yaml:"include_git_history" json:"include_git_history"`
+	IncludeDependencies bool   `yaml:"include_dependencies" json:"include_dependencies"`
+	CompressionStrategy string `yaml:"compression_strategy" json:"compression_strategy"` // "summary", "truncate", "hybrid"
+	ProgressiveLoading  bool   `yaml:"progressive_loading" json:"progressive_loading"`
 }
 
 // AgentMetadata captures auxiliary metadata for display.
