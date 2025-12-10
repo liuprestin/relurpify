@@ -367,6 +367,14 @@ func (m Model) runAgentStream(ch chan tea.Msg, prompt string) {
 	if _, ok := metadata["strategy"]; !ok && m.session != nil && m.session.Strategy != "" {
 		metadata["strategy"] = m.session.Strategy
 	}
+	
+	// Create a streaming callback if supported by the agent
+	if ch != nil {
+		metadata["stream_callback"] = func(token string) {
+			ch <- StreamTokenMsg{TokenType: TokenText, Token: token}
+		}
+	}
+
 	result, err := m.runtime.ExecuteInstruction(ctx, prompt, framework.TaskTypeCodeGeneration, metadata)
 	if err != nil {
 		ch <- StreamErrorMsg{Error: err}
