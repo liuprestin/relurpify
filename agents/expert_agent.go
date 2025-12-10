@@ -2,21 +2,22 @@ package agents
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/lexcodex/relurpify/framework"
 )
 
 // ExpertCoderAgent chains the architect planner with the coding delegate,
 // mirroring the pipeline pattern from the specification.
+//
+// Deprecated: This logic has been consolidated into AgentCoordinator.
+// This struct now acts as a pre-configured wrapper around AgentCoordinator.
 type ExpertCoderAgent struct {
 	Model  framework.LanguageModel
 	Tools  *framework.ToolRegistry
 	Memory framework.MemoryStore
 	Config *framework.Config
 
-	planner *PlannerAgent
-	coder   *CodingAgent
+	coordinator *AgentCoordinator
 }
 
 // Initialize configures the planner and coding delegates.
@@ -25,12 +26,34 @@ func (a *ExpertCoderAgent) Initialize(cfg *framework.Config) error {
 	if a.Tools == nil {
 		a.Tools = framework.NewToolRegistry()
 	}
-	a.planner = &PlannerAgent{Model: a.Model, Tools: a.Tools, Memory: a.Memory}
-	if err := a.planner.Initialize(cfg); err != nil {
+
+	planner := &PlannerAgent{Model: a.Model, Tools: a.Tools, Memory: a.Memory}
+	if err := planner.Initialize(cfg); err != nil {
 		return err
 	}
-	a.coder = &CodingAgent{Model: a.Model, Tools: a.Tools, Memory: a.Memory}
-	return a.coder.Initialize(cfg)
+
+	coder := &CodingAgent{Model: a.Model, Tools: a.Tools, Memory: a.Memory}
+	if err := coder.Initialize(cfg); err != nil {
+		return err
+	}
+
+	// Initialize coordinator with a default budget
+	a.coordinator = NewAgentCoordinator(nil, framework.NewContextBudget(16000))
+	a.coordinator.RegisterAgent("planner", planner)
+	a.coordinator.RegisterAgent("executor", coder)
+	
+	// Register an 'ask' agent for self-healing diagnostics if available
+	asker := &ReActAgent{
+		Model: a.Model, 
+		Tools: a.Tools, 
+		Memory: a.Memory,
+		Mode: "ask",
+	}
+	if err := asker.Initialize(cfg); err == nil {
+		a.coordinator.RegisterAgent("ask", asker)
+	}
+
+	return nil
 }
 
 // Capabilities merges planning and coding skills.
@@ -46,98 +69,40 @@ func (a *ExpertCoderAgent) Capabilities() []framework.Capability {
 // BuildGraph constructs a pipeline graph.
 func (a *ExpertCoderAgent) BuildGraph(task *framework.Task) (*framework.Graph, error) {
 	graph := framework.NewGraph()
-	plan := &expertPlanNode{id: "expert_plan", agent: a, task: task}
-	implement := &expertImplementNode{id: "expert_implement", agent: a, task: task}
-	done := framework.NewTerminalNode("expert_done")
-	if err := graph.AddNode(plan); err != nil {
+	// We wrap the coordinator in a single system node
+	node := &expertCoordinatorNode{
+		id:    "expert_coordination",
+		agent: a,
+		task:  task,
+	}
+
+	if err := graph.AddNode(node); err != nil {
 		return nil, err
 	}
-	if err := graph.AddNode(implement); err != nil {
+	if err := graph.SetStart(node.ID()); err != nil {
 		return nil, err
 	}
-	if err := graph.AddNode(done); err != nil {
-		return nil, err
-	}
-	if err := graph.SetStart(plan.ID()); err != nil {
-		return nil, err
-	}
-	_ = graph.AddEdge(plan.ID(), implement.ID(), nil, false)
-	_ = graph.AddEdge(implement.ID(), done.ID(), nil, false)
 	return graph, nil
 }
 
 // Execute runs plan then coding mode.
 func (a *ExpertCoderAgent) Execute(ctx context.Context, task *framework.Task, state *framework.Context) (*framework.Result, error) {
-	graph, err := a.BuildGraph(task)
-	if err != nil {
-		return nil, err
+	if task.Metadata == nil {
+		task.Metadata = make(map[string]string)
 	}
-	return graph.Execute(ctx, state)
+	// Force plan_execute strategy to maintain backward compatibility behavior
+	task.Metadata["strategy"] = "plan_execute"
+	return a.coordinator.Execute(ctx, task, state)
 }
 
-type expertPlanNode struct {
+type expertCoordinatorNode struct {
 	id    string
 	agent *ExpertCoderAgent
 	task  *framework.Task
 }
 
-// ID returns the stable node identifier used inside the graph.
-func (n *expertPlanNode) ID() string { return n.id }
-
-// Type identifies the graph node as part of the system pipeline.
-func (n *expertPlanNode) Type() framework.NodeType { return framework.NodeTypeSystem }
-
-// Execute first collects a plan using the planner delegate so the coding phase
-// has structured guidance.
-func (n *expertPlanNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
-	state.SetExecutionPhase("planning")
-	result, err := n.agent.planner.Execute(ctx, n.task, state)
-	if err != nil {
-		return nil, err
-	}
-	state.Set("expert.plan", result.Data)
-	return &framework.Result{
-		NodeID:  n.id,
-		Success: true,
-		Data:    result.Data,
-	}, nil
-}
-
-type expertImplementNode struct {
-	id    string
-	agent *ExpertCoderAgent
-	task  *framework.Task
-}
-
-// ID returns the identifier used by the execution graph.
-func (n *expertImplementNode) ID() string { return n.id }
-
-// Type instructs the graph executor to treat this step as a system transition.
-func (n *expertImplementNode) Type() framework.NodeType { return framework.NodeTypeSystem }
-
-// Execute reuses the coding delegate but injects mode + plan context so the
-// downstream agent can render appropriate status.
-func (n *expertImplementNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
-	state.SetExecutionPhase("executing")
-	task := *n.task
-	if task.Context == nil {
-		task.Context = map[string]any{}
-	}
-	task.Context["mode"] = string(ModeCode)
-	task.Context["plan"] = mustGet(state, "expert.plan")
-	result, err := n.agent.coder.Execute(ctx, &task, state)
-	if err != nil {
-		return nil, err
-	}
-	return &framework.Result{NodeID: n.id, Success: true, Data: result.Data}, nil
-}
-
-// mustGet panics when the requested context key is missing. The helper keeps
-// surrounding code clean because the graph wiring guarantees the key exists.
-func mustGet(ctx *framework.Context, key string) interface{} {
-	value, ok := ctx.Get(key)
-	if !ok {
-		panic(fmt.Sprintf("missing context key %s", key))
-	}
-	return value
+func (n *expertCoordinatorNode) ID() string { return n.id }
+func (n *expertCoordinatorNode) Type() framework.NodeType { return framework.NodeTypeSystem }
+func (n *expertCoordinatorNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
+	return n.agent.Execute(ctx, n.task, state)
 }
