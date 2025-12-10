@@ -7,9 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	runtimesvc "github.com/lexcodex/relurpify/app/relurpish/runtime"
 	"github.com/lexcodex/relurpify/framework"
@@ -39,6 +41,7 @@ type Model struct {
 
 	feed  *viewport.Model
 	input textinput.Model
+	spinner spinner.Model
 
 	statusBar StatusBar
 
@@ -182,6 +185,7 @@ type Session struct {
 	Model         string
 	Agent         string
 	Mode          string
+	Strategy      string
 	TotalTokens   int
 	TotalDuration time.Duration
 }
@@ -243,6 +247,10 @@ func NewModel(rt *runtimesvc.Runtime) Model {
 	v := viewport.New(0, 0)
 	vp := &v
 
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 	session := &Session{
 		ID:        fmt.Sprintf("session-%d", time.Now().UnixNano()),
 		StartTime: time.Now(),
@@ -290,6 +298,7 @@ func NewModel(rt *runtimesvc.Runtime) Model {
 		config:     cfg,
 		feed:       vp,
 		input:      input,
+		spinner:    sp,
 		statusBar:  status,
 		messages:   []Message{},
 		context:    ctx,
@@ -354,6 +363,9 @@ func (m Model) runAgentStream(ch chan tea.Msg, prompt string) {
 	}
 	if _, ok := metadata["mode"]; !ok && m.session != nil {
 		metadata["mode"] = m.session.Mode
+	}
+	if _, ok := metadata["strategy"]; !ok && m.session != nil && m.session.Strategy != "" {
+		metadata["strategy"] = m.session.Strategy
 	}
 	result, err := m.runtime.ExecuteInstruction(ctx, prompt, framework.TaskTypeCodeGeneration, metadata)
 	if err != nil {
