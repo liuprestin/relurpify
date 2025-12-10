@@ -19,6 +19,13 @@ var errBinaryFile = errors.New("binary file detected")
 // ReadFileTool reads files from disk.
 type ReadFileTool struct {
 	BasePath string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *ReadFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *ReadFileTool) Name() string        { return "file_read" }
@@ -29,6 +36,13 @@ func (t *ReadFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *ReadFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
+	
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
+			return nil, err
+		}
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -61,6 +75,13 @@ func (t *ReadFileTool) Permissions() framework.ToolPermissions {
 type WriteFileTool struct {
 	BasePath string
 	Backup   bool
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *WriteFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *WriteFileTool) Name() string        { return "file_write" }
@@ -74,10 +95,22 @@ func (t *WriteFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *WriteFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
+	
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, path); err != nil {
+			return nil, err
+		}
+	}
+
 	content := []byte(fmt.Sprint(args["content"]))
 	if t.Backup {
 		if _, err := os.Stat(path); err == nil {
 			backup := path + ".bak"
+			if t.manager != nil {
+				if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, backup); err != nil {
+					return nil, fmt.Errorf("backup blocked: %w", err)
+				}
+			}
 			if err := copyFile(path, backup); err != nil {
 				return nil, err
 			}
@@ -99,6 +132,13 @@ func (t *WriteFileTool) Permissions() framework.ToolPermissions {
 // ListFilesTool lists files filtered by pattern.
 type ListFilesTool struct {
 	BasePath string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *ListFilesTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *ListFilesTool) Name() string        { return "file_list" }
@@ -112,6 +152,13 @@ func (t *ListFilesTool) Parameters() []framework.ToolParameter {
 }
 func (t *ListFilesTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	dir := t.preparePath(fmt.Sprint(args["directory"]))
+	
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, dir); err != nil {
+			return nil, err
+		}
+	}
+
 	pattern := fmt.Sprint(args["pattern"])
 	var files []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -124,6 +171,15 @@ func (t *ListFilesTool) Execute(ctx context.Context, state *framework.Context, a
 			}
 			return nil
 		}
+		
+		// If strict checking is desired for every file encountered:
+		// if t.manager != nil {
+		// 	if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, path); err != nil {
+		// 		return nil // Skip this file? Or fail? Let's just skip it implicitly by checking "list" on root.
+		//      // Standard "ls -R" usually implies ability to read children if parent is readable.
+		// 	}
+		// }
+
 		match, _ := filepath.Match(pattern, filepath.Base(path))
 		if match {
 			files = append(files, path)
@@ -146,6 +202,13 @@ func (t *ListFilesTool) Permissions() framework.ToolPermissions {
 // SearchInFilesTool greps for a pattern.
 type SearchInFilesTool struct {
 	BasePath string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *SearchInFilesTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *SearchInFilesTool) Name() string        { return "file_search" }
@@ -159,6 +222,14 @@ func (t *SearchInFilesTool) Parameters() []framework.ToolParameter {
 }
 func (t *SearchInFilesTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	dir := t.preparePath(fmt.Sprint(args["directory"]))
+	
+	if t.manager != nil {
+		// Search implies reading files
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, dir); err != nil {
+			return nil, err
+		}
+	}
+
 	pattern := fmt.Sprint(args["pattern"])
 	type match struct {
 		File    string `json:"file"`
@@ -176,6 +247,14 @@ func (t *SearchInFilesTool) Execute(ctx context.Context, state *framework.Contex
 			}
 			return nil
 		}
+		
+		// Ideally verify read access for each file
+		if t.manager != nil {
+			if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
+				return nil // Skip unreadable
+			}
+		}
+
 		file, err := os.Open(path)
 		if err != nil {
 			return err
@@ -211,6 +290,13 @@ func (t *SearchInFilesTool) Permissions() framework.ToolPermissions {
 // CreateFileTool creates a file from a template string.
 type CreateFileTool struct {
 	BasePath string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *CreateFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *CreateFileTool) Name() string        { return "file_create" }
@@ -224,6 +310,13 @@ func (t *CreateFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *CreateFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
+	
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, path); err != nil {
+			return nil, err
+		}
+	}
+
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("file %s already exists", path)
 	}
@@ -244,6 +337,13 @@ func (t *CreateFileTool) Permissions() framework.ToolPermissions {
 type DeleteFileTool struct {
 	BasePath string
 	TrashDir string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *DeleteFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *DeleteFileTool) Name() string        { return "file_delete" }
@@ -254,6 +354,13 @@ func (t *DeleteFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *DeleteFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
+	
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, path); err != nil {
+			return nil, err
+		}
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
