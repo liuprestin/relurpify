@@ -9,7 +9,7 @@ import (
 )
 
 // RenderMessage converts a Message into a styled string for the viewport.
-func RenderMessage(msg Message, width int) string {
+func RenderMessage(msg Message, width int, spinnerView string) string {
 	var b strings.Builder
 
 	header := renderMessageHeader(msg)
@@ -20,7 +20,7 @@ func RenderMessage(msg Message, width int) string {
 	case RoleUser:
 		b.WriteString(renderUserMessage(msg))
 	case RoleAgent:
-		b.WriteString(renderAgentMessage(msg, width))
+		b.WriteString(renderAgentMessage(msg, width, spinnerView))
 	case RoleSystem:
 		b.WriteString(renderSystemMessage(msg))
 	}
@@ -61,16 +61,16 @@ func renderSystemMessage(msg Message) string {
 	return dimStyle.Render(msg.Content.Text)
 }
 
-func renderAgentMessage(msg Message, width int) string {
+func renderAgentMessage(msg Message, width int, spinnerView string) string {
 	var b strings.Builder
 
 	if len(msg.Content.Thinking) > 0 {
-		b.WriteString(renderThinkingSection(msg.Content.Thinking, msg.Content.Expanded["thinking"], width))
+		b.WriteString(renderThinkingSection(msg.Content.Thinking, msg.Content.Expanded["thinking"], width, spinnerView))
 		b.WriteString("\n\n")
 	}
 
 	if msg.Content.Plan != nil {
-		b.WriteString(renderPlanSection(msg.Content.Plan, msg.Content.Expanded["plan"], width))
+		b.WriteString(renderPlanSection(msg.Content.Plan, msg.Content.Expanded["plan"], width, spinnerView))
 		b.WriteString("\n\n")
 	}
 
@@ -86,7 +86,7 @@ func renderAgentMessage(msg Message, width int) string {
 	return b.String()
 }
 
-func renderThinkingSection(steps []ThinkingStep, expanded bool, width int) string {
+func renderThinkingSection(steps []ThinkingStep, expanded bool, width int, spinnerView string) string {
 	var b strings.Builder
 	header := "🤔 Thinking"
 	toggle := "[−]"
@@ -107,6 +107,11 @@ func renderThinkingSection(steps []ThinkingStep, expanded bool, width int) strin
 			prefix = "└─"
 		}
 		icon := getStepIcon(step.Type)
+		// animate thinking if it's the last step and has no end time (implies running)
+		if isLast && step.EndTime.IsZero() {
+			icon = spinnerView
+		}
+		
 		duration := ""
 		if !step.EndTime.IsZero() {
 			d := step.EndTime.Sub(step.StartTime)
@@ -139,7 +144,7 @@ func getStepIcon(t StepType) string {
 	}
 }
 
-func renderPlanSection(plan *TaskPlan, expanded bool, width int) string {
+func renderPlanSection(plan *TaskPlan, expanded bool, width int, spinnerView string) string {
 	var b strings.Builder
 	completed := 0
 	for _, task := range plan.Tasks {
@@ -165,7 +170,7 @@ func renderPlanSection(plan *TaskPlan, expanded bool, width int) string {
 			icon = "✅"
 			style = completedStyle
 		case TaskInProgress:
-			icon = "⏳"
+			icon = spinnerView
 			style = inProgressStyle
 		default:
 			icon = "☐"
