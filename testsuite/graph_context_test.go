@@ -117,6 +117,80 @@ func TestSharedContextBudgetCompressionFlow(t *testing.T) {
 	}
 }
 
+func TestGraphParallelExecution(t *testing.T) {
+	graph := framework.NewGraph()
+
+	// Start Node
+	start := &recordingNode{id: "start"}
+	// Branch A: sets "a"=1
+	branchA := &recordingNode{id: "branchA", run: func(state *framework.Context) {
+		state.Set("val.a", 1)
+	}}
+	// Branch B: sets "b"=2
+	branchB := &recordingNode{id: "branchB", run: func(state *framework.Context) {
+		state.Set("val.b", 2)
+	}}
+	// Merge Node (implicitly happens when branches join)
+	end := framework.NewTerminalNode("end")
+
+	graph.AddNode(start)
+	graph.AddNode(branchA)
+	graph.AddNode(branchB)
+	graph.AddNode(end)
+
+	graph.SetStart("start")
+
+	// Split: Start -> A (Parallel), Start -> B (Parallel)
+	graph.AddEdge("start", "branchA", nil, true)
+	graph.AddEdge("start", "branchB", nil, true)
+
+	// Join: A -> End, B -> End
+	// Note: The framework supports merging context from parallel branches.
+	// When multiple branches converge to a node, that node is executed once for each incoming edge *conceptually*,
+	// OR the framework waits.
+	// Looking at graph.go: "Launch parallel branches... merging their updates... wg.Wait()".
+	// The current implementation executes parallel edges and merges results back to the PARENT context.
+	// It does NOT support a true "Join" node that waits for all predecessors.
+	// Instead, the parallel branches are executed, and then the parent flow continues.
+	// Wait, graph.go nextNodes() logic:
+	// "Launch parallel branches... wg.Wait() ... if len(serialEdges) == 0 { return "", nil }"
+	// This means parallel branches are "fork-join" at the edge level.
+	// So if 'start' has parallel edges to A and B, it will run A and B to completion (assuming they are sub-chains or leaves).
+	// If A and B are simple nodes that don't point anywhere, they finish, and then we continue?
+	// Actually, if 'start' has serial edges too, it would take them.
+	// But A and B are separate paths.
+	//
+	// Let's re-read graph.go:
+	// for _, edge := range parallelEdges { go func() { ... executeBranch(edge.To, branchCtx) ... merge } }
+	// The executeBranch runs the subgraph starting at edge.To.
+	// So A and B must terminate or converge.
+	// If A points to End, and B points to End.
+	// Branch A execution: Run A -> Run End.
+	// Branch B execution: Run B -> Run End.
+	// Both will merge "End" modifications back.
+	//
+	// To verify state merge, we just need A and B to set variables.
+	
+	graph.AddEdge("branchA", "end", nil, false)
+	graph.AddEdge("branchB", "end", nil, false)
+
+	ctx := framework.NewContext()
+	_, err := graph.Execute(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	valA, _ := ctx.Get("val.a")
+	valB, _ := ctx.Get("val.b")
+
+	if valA != 1 {
+		t.Errorf("expected val.a=1, got %v", valA)
+	}
+	if valB != 2 {
+		t.Errorf("expected val.b=2, got %v", valB)
+	}
+}
+
 type recordingNode struct {
 	id  string
 	run func(*framework.Context)
