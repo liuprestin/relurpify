@@ -1,11 +1,15 @@
 package framework
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+var ErrNotAgentDefinition = errors.New("not an agent definition")
 
 // AgentDefinition defines the configuration for a single agent.
 type AgentDefinition struct {
@@ -19,6 +23,15 @@ func LoadAgentDefinition(path string) (*AgentDefinition, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
+	}
+	var header struct {
+		Kind string `yaml:"kind"`
+	}
+	if err := yaml.Unmarshal(data, &header); err != nil {
+		return nil, err
+	}
+	if header.Kind != "" && !strings.EqualFold(header.Kind, "AgentDefinition") {
+		return nil, ErrNotAgentDefinition
 	}
 	var def AgentDefinition
 	if err := yaml.Unmarshal(data, &def); err != nil {
