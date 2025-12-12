@@ -6,6 +6,7 @@ import "github.com/lexcodex/relurpify/framework"
 func Tools(basePath string) []framework.Tool {
 	return []framework.Tool{
 		NewAwkTool(basePath),
+		NewEchoTool(basePath),
 		NewSedTool(basePath),
 		NewPerlTool(basePath),
 		NewJQTool(basePath),
