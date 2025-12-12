@@ -35,6 +35,9 @@ func (a *PlannerAgent) Execute(ctx context.Context, task *framework.Task, state 
 	if err != nil {
 		return nil, err
 	}
+	if cfg := a.Config; cfg != nil && cfg.Telemetry != nil {
+		graph.SetTelemetry(cfg.Telemetry)
+	}
 	return graph.Execute(ctx, state)
 }
 
