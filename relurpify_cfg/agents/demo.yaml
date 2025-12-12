@@ -25,6 +25,8 @@ spec:
             - binary: go
               args:
                 - '*'
+            - binary: touch
+            - binary: echo
         network:
             - direction: egress
               protocol: tcp
