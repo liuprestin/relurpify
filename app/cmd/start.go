@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -105,10 +106,11 @@ func newStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			tools.UseTelemetry(framework.LoggerTelemetry{Logger: log.Default()})
 			if registration.Permissions != nil {
 				tools.UsePermissionManager(registration.ID, registration.Permissions)
 			}
-			memoryPath := filepath.Join(ws, ".relurpish", "memory")
+			memoryPath := filepath.Join(ws, "relurpify_cfg", "memory")
 			memory, err := framework.NewHybridMemory(memoryPath)
 			if err != nil {
 				return err
