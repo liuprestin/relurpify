@@ -131,6 +131,9 @@ func (a *ReActAgent) Execute(ctx context.Context, task *framework.Task, state *f
 		a.sharedContext = nil
 		a.initialLoadDone = false
 	}()
+	if cfg := a.Config; cfg != nil && cfg.Telemetry != nil {
+		graph.SetTelemetry(cfg.Telemetry)
+	}
 	result, err := graph.Execute(ctx, state)
 	return result, err
 }
