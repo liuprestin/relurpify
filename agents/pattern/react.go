@@ -576,7 +576,9 @@ func (n *reactActNode) Type() framework.NodeType { return framework.NodeTypeTool
 func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*framework.Result, error) {
 	state.SetExecutionPhase("executing")
 	if pending, ok := state.Get("react.tool_calls"); ok {
-		if calls, ok := pending.([]framework.ToolCall); ok && len(calls) > 0 {
+		if n.agent.Config != nil && !n.agent.Config.OllamaToolCalling {
+			state.Set("react.tool_calls", []framework.ToolCall{})
+		} else if calls, ok := pending.([]framework.ToolCall); ok && len(calls) > 0 {
 			results := make(map[string]interface{})
 			for _, call := range calls {
 				tool, ok := n.agent.Tools.Get(call.Name)
@@ -606,15 +608,23 @@ func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*
 		return nil, fmt.Errorf("missing decision from think step")
 	}
 	decision := val.(decisionPayload)
-	if decision.Complete || decision.Tool == "" || decision.Tool == "none" {
+	toolName := strings.TrimSpace(decision.Tool)
+	if decision.Complete || toolName == "" || strings.EqualFold(toolName, "none") {
 		state.Set("react.last_tool_result", map[string]interface{}{})
 		result := &framework.Result{NodeID: n.id, Success: true}
 		state.Set("react.last_result", result)
 		return result, nil
 	}
-	tool, ok := n.agent.Tools.Get(decision.Tool)
+	tool, ok := n.agent.Tools.Get(toolName)
 	if !ok {
-		return nil, fmt.Errorf("unknown tool %s", decision.Tool)
+		lower := strings.ToLower(toolName)
+		if lower == "" || strings.Contains(lower, "none") {
+			state.Set("react.last_tool_result", map[string]interface{}{})
+			result := &framework.Result{NodeID: n.id, Success: true}
+			state.Set("react.last_result", result)
+			return result, nil
+		}
+		return nil, fmt.Errorf("unknown tool %s", toolName)
 	}
 	res, err := tool.Execute(ctx, state, decision.Arguments)
 	if err != nil {
