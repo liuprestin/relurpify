@@ -122,7 +122,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		logFile.Close()
 		return nil, fmt.Errorf("ollama model not configured; update %s", cfg.ManifestPath)
 	}
-	
+
 	// Load all agent definitions from the agents directory
 	agentDefs, err := LoadAgentDefinitions(cfg.AgentsDir)
 	if err != nil && !os.IsNotExist(err) {
@@ -133,7 +133,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	// Setup Telemetry
 	var sinks []framework.Telemetry
 	sinks = append(sinks, framework.LoggerTelemetry{Logger: logger})
-	
+
 	if cfg.TelemetryPath != "" {
 		if err := os.MkdirAll(filepath.Dir(cfg.TelemetryPath), 0o755); err == nil {
 			if fileSink, err := framework.NewJSONFileTelemetry(cfg.TelemetryPath); err == nil {
@@ -144,9 +144,10 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		}
 	}
 	telemetry := framework.MultiplexTelemetry{Sinks: sinks}
+	registry.UseTelemetry(telemetry)
 
 	model := llm.NewClient(cfg.OllamaEndpoint, cfg.OllamaModel)
-	
+
 	// Create base config derived from manifest + CLI args
 	agentCfg := &framework.Config{
 		Name:              cfg.AgentLabel(),
@@ -159,7 +160,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 
 	agent := instantiateAgent(cfg, model, registry, memory, agentDefs, agentCfg)
-	
+
 	if err := agent.Initialize(agentCfg); err != nil {
 		logFile.Close()
 		return nil, fmt.Errorf("initialize agent: %w", err)
@@ -250,7 +251,7 @@ func BuildToolRegistry(workspace string, runner framework.CommandRunner) (*frame
 			return nil, err
 		}
 	}
-	indexDir := filepath.Join(workspace, ".ast_index")
+	indexDir := filepath.Join(workspace, "relurpify_cfg", "memory", "ast_index")
 	if err := os.MkdirAll(indexDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -284,6 +285,9 @@ func LoadAgentDefinitions(dir string) (map[string]*framework.AgentDefinition, er
 		path := filepath.Join(dir, entry.Name())
 		def, err := framework.LoadAgentDefinition(path)
 		if err != nil {
+			if errors.Is(err, framework.ErrNotAgentDefinition) {
+				continue
+			}
 			return nil, fmt.Errorf("load %s: %w", entry.Name(), err)
 		}
 		if def.Name == "" {
@@ -304,7 +308,7 @@ func instantiateAgent(cfg Config, model framework.LanguageModel, registry *frame
 		if def.Spec.Model.Name != "" {
 			agentCfg.Model = def.Spec.Model.Name
 		}
-		
+
 		// Use the Implementation field to pick struct
 		switch def.Spec.Implementation {
 		case "planner":
@@ -357,7 +361,7 @@ func (r *Runtime) ExecuteInstruction(ctx context.Context, instruction string, ta
 	if taskType == "" {
 		taskType = framework.TaskTypeCodeModification
 	}
-	
+
 	metaStrings := make(map[string]string)
 	if metadata != nil {
 		for k, v := range metadata {
