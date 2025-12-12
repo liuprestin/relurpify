@@ -33,7 +33,7 @@ func TestSaveManifestCreatesFile(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Workspace = dir
 	cfg.ManifestPath = filepath.Join(dir, "agent.manifest.yaml")
-	cfg.ConfigPath = filepath.Join(dir, ".relurpish", "config.yaml")
+	cfg.ConfigPath = filepath.Join(dir, "relurpify_cfg", "config.yaml")
 	selection := WizardSelection{
 		Model:   "deepseek-r1:7b",
 		Agents:  []string{"coding"},
@@ -57,7 +57,7 @@ func TestProbeEnvironmentHandlesMissingRunsc(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Workspace = dir
 	cfg.ManifestPath = filepath.Join(dir, "agent.manifest.yaml")
-	cfg.ConfigPath = filepath.Join(dir, ".relurpish", "config.yaml")
+	cfg.ConfigPath = filepath.Join(dir, "relurpify_cfg", "config.yaml")
 	cfg.Sandbox.RunscPath = "runsc-missing"
 	report := ProbeEnvironment(context.Background(), cfg)
 	require.Contains(t, strings.Join(report.Sandbox.Errors, " "), "runsc not found")
