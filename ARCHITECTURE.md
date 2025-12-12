@@ -1,102 +1,28 @@
-# Architecture Outline
+# Relurpify Architecture
 
-This document supplements the GoDoc pages and explains the moving pieces
-behind the agentic runtime shipped in this repository. Use it as a high-level
-tour before diving into individual packages.
+The repository ships a secure agentic runtime plus multiple control surfaces. The core framework keeps agents, tools, and LLMs interoperable, while the agent implementations and UIs layer on top; the sections below separate each concern so you can reason about new features without conflating runtime plumbing with agent logic or presentation.
 
-## Runtime Layers
+## 1. Agentic Framework
 
-1. **Entry points (`cmd/server`, `cmd/relurpify`)** – bootstrap the tool registry,
-   memory stores, language servers, and HTTP/LSP front-ends. They translate
-   editor or CLI requests into `framework.Task` instances.
-2. **Server package (`server/*`)** – bridges the entry points and the
-   framework. It owns the lifecycle of the LSP/HTTP servers and wires agent
-   factories, persistence stores, and observability hooks together.
-3. **Framework core (`framework/*`)** – provides graph execution, shared
-   context, telemetry, memory, and tool abstractions. Agents build workflows
-   out of these primitives.
-4. **Agents (`agents/*`)** – implement strategies such as planning,
-   reflection, and coding. They orchestrate LLM calls plus tool usage by
-   instantiating graphs of `framework.Node`s.
-5. **Tools (`tools/*`)** – wrap LSP proxies, filesystem operations, git,
-   test runners, and shell utilities. Agents discover them via the
-   `ToolRegistry` and call them through a uniform interface.
-6. **LLM client (`llm/ollama.go`)** – talks to the configured Ollama endpoint
-   and satisfies the `framework.LanguageModel` contract, so every agent can
-   swap models without changing business logic.
-7. **Persistence (`persistence/*`)** – stores workflow snapshots, message
-   logs, and vector memory. These stores make long-running, pause/resume
-   workflows possible.
+- **Runtime registration & manifest enforcement** – `framework.RegisterAgent` wires the manifest, sandbox, permission manager, audit log, and HITL broker before handing execution over to any agent (`framework/runtime.go:10-116`). The manifest schema (`framework/manifest.go:11-200`) maps security, resource, and agent runtime metadata so each deployment can bake capabilities and restrictions into a reusable artifact.
+- **Graph + context + budget** – Every agent builds `framework.Graph` workflows that emit telemetry while respecting parallel branches, checkpoints, and deterministic merges (`framework/graph.go:11-200`). Those graphs run against `framework.Context`, a thread-safe blackboard that stores state, history, snapshots, and compression logs (`framework/context.go:41-198`). `framework.ContextBudget` and the context builder (`framework/context_budget.go:10-174`, `framework/context_builder.go:1-120`) guard token allocations, driving pruning, compression, and history summaries before an LLM sees the prompt.
+- **Tools, telemetry, and persistence** – `app/relurpish/runtime.BuildToolRegistry` registers file operations, grep/search helpers, git commands, test linters, and an AST index so agents always get a predictable toolset (`app/relurpish/runtime/runtime.go:198-271`). Language-server adapters such as `tools/lsp_process_client` keep the same JSON-RPC plumbing that editors expect (`tools/lsp_process_client.go:22-200`). Execution traces and budget events flow through the telemetry stack (`framework/telemetry.go:11-174`), while `framework.HybridMemory` preserves session/project/global memories for future runs (`framework/memory.go:14-200`).
+- **Security, permissions, and HITL** – The manifest’s `Permissions` section becomes a `framework.PermissionManager` that validates file, executable, network, and IPC scopes plus HITL requirements before any tool runs (`framework/permissions.go:15-200`). Denials bubble up with structured metadata, and the `framework.HITLBroker` exposes buffered approval workflows that the UI consumes (`framework/hitl.go:11-189`).
 
-## Execution Flow
+## 2. Agents implemented on the framework
 
-```
-Editor/CLI --> server.LSPServer / server.APIServer
-           --> server.AgentFactory selects an Agent
-           --> Agent.BuildGraph wires nodes and tools
-           --> framework.Graph.Execute runs nodes
-           --> tools + llm clients perform side effects
-           --> results streamed back through the server
-```
+- **PlannerAgent** – The pattern-based planner breaks work into plan → execute → verify nodes so you can reason about strategy, collect structured plans, and persist summaries/memories (`agents/pattern/planner.go:11-198`).
+- **ReActAgent** – A configurable Reason+Act agent threads context strategies, progressive loaders, and budgets through every cycle, making it ideal for general-purpose coding, debugging, or “ask” flows (`agents/pattern/react.go:16-195`).
+- **CodingAgent** – This multi-mode wrapper routes instructions into architect, ask, document, or default ReAct delegates, applies manifest-driven tool matrices, and enriches the context before delegating to the underlying graph (`agents/coding_agent.go:12-187`).
+- **ExpertCoderAgent** – Now a thin wrapper that pre-configures a planner and coding executor behind an `AgentCoordinator`, it demonstrates the canonical plan-execute cycle and exposes planner/coding capabilities together (`agents/expert_agent.go:9-96`).
+- **AgentCoordinator** – Orchestrates indexer/planner/executor/reviewer agents with shared context, recovery retries, dependency-aware step scheduling, and review iterations so complex workflows can run deterministically (`agents/coordinator.go:13-200`).
+- **ReflectionAgent** – Wraps a delegate agent with a reviewer loop that reruns tasks until reviews approve, then surfaces structured issues and approval decisions (`agents/pattern/reflection.go:11-196`).
+- **EternalAgent** – A specialty agent that streams “CLI mood / hyperstition” chats, keeps looping until cancelled, and writes its own output back into the state so the runtime can track perpetual reasoning (`agents/eternal_agent.go:11-157`).
+- **Agent aliases & registries** – The runtime picks a concrete struct based on CLI presets or YAML manifests, so the same framework code can drive planner/react/reflection/expert/coding/eternal behaviors without recompiling (`app/relurpish/runtime/runtime.go:297-339`).
 
-Key points:
+## 3. User-facing surfaces (UI & control)
 
-- `framework.Context` is cloned per parallel branch and merged after each
-  `Graph` edge, keeping concurrent updates deterministic.
-- Telemetry (`framework.Telemetry`) emits events around every node start,
-  finish, and error, enabling live dashboards or lightweight logging.
-- Memories captured via `framework.MemoryStore` travel with the task and are
-  persisted outside the graph, so future runs can recall successful plans.
-
-## Package Highlights
-
-- `framework/context.go` – Implements the thread-safe state container agents
-  share. It tracks execution phase, scratch variables, and interaction history.
-- `framework/graph.go` – Deterministic workflow engine with optional parallel
-  branches, snapshots for pause/resume, and telemetry hooks.
-- `agents/planner.go` – Demonstrates a full plan → execute → verify loop,
-  storing structured plans and execution summaries back into the context.
-- `agents/coder.go` – Pairs the coding agent with reflection logic to keep
-  iterations tight when modifying real files.
-- `tools/lsp_process_client.go` – Launches and multiplexes external language
-  servers so the agents can request definitions, references, or formatting.
-- `persistence/workflow_store.go` – Persists `GraphSnapshot`s so interrupted
-  workflows can resume exactly where they stopped.
-
-## Security & Compliance
-
-- **Sandbox runtime** – `framework/sandbox.go` enforces gVisor (`runsc`) usage and
-  validates Docker/containerd integration before any agent can execute.
-- **Permission manager** – `framework/permissions.go` implements the default-deny
-  policy. Every tool declares a permission manifest, which the manager checks
-  against the agent's `agent.manifest.yaml` and the active workspace scope. All
-  filesystem, network, IPC, capability, and executable operations pass through
-  this middleware.
-- **Agent manifest** – `framework/manifest.go` and the root `agent.manifest.yaml`
-  require explicit permission declarations, resource limits, and audit settings
-  before registration proceeds.
-- **HITL approvals** – `framework/hitl.go` introduces structured permission
-  requests, grant scopes (one-time/session/persistent/conditional), and approval
-  tracking with timeout controls.
-- **Audit logging** – `framework/audit.go` emits structured JSON logs for every
-  action, permission request, and sandbox decision. The CLI surfaces queries via
-  the runtime APIs so operations teams can satisfy compliance requirements.
-
-## Extending the System
-
-- **New agents** – Implement the `framework.Agent` interface, register them in
-  the factory, and reuse the context/memory primitives to stay interoperable.
-- **New tools** – Implement `framework.Tool`, register it with the shared
-  registry, and optionally expose it to LLMs via the planner's plan schema.
-- **Different models** – Provide a struct that satisfies
-  `framework.LanguageModel` and inject it into the server/CLI configuration.
-- **Custom persistence** – Swap `persistence.NewFileWorkflowStore` or the
-  memory store with your own implementation to integrate databases or vector
-  services.
-
-## Documentation Strategy
-
-`./scripts/gen-docs.sh` uses the `golds` tool to generate Go API docs and then
-publishes this architecture outline alongside the package pages. This ensures
-newcomers land on both the code-level docs and the big-picture explanation
-whenever the static site is regenerated.
+- **Coding-agent CLI** – `app/cmd` wires the `coding-agent` root command with persistent flags for workspace/config selection (`app/cmd/root.go:1-40`) and exposes `start`, `agents`, `config`, and `session` subcommands. `start` boots workspaces, resolves manifests, registers sandboxes, and runs instructions in named modes (`app/cmd/start.go:18-155`). `agents` helps you list/create/test manifests so custom runtimes stay manageable (`app/cmd/agents.go:16-200`), and `session` records lightweight snapshots for reuse (`app/cmd/session.go:1-94`).
+- **Relurpish TUI + runtime** – `relurpish` runs as a Bubble Tea-powered shell with wizard/chat/status flows plus an optional HTTP API server (`app/relurpish/main.go:1-149`). The Relurpish runtime centralizes log/telemetry/memory, loads workspace configs, builds tool registries, wires manifests, and exposes helpers such as `RunTask`, `ExecuteInstruction`, and `StartServer` so the UI and automation scripts share the same agent state (`app/relurpish/runtime/runtime.go:23-459`). The `Config` package normalizes defaults, workspace selections, and persisted wizard choices (`app/relurpish/runtime/config.go:1-143`).
+- **TUI components** – The Bubble Tea `Model` drives a prompt/feed/status triad, keeps a spinner/creator for streaming tokens, and renders rich messages that include plan steps, reasoning, diffs, and session metrics (`app/relurpish/tui/model.go:20-199`, `app/relurpish/tui/view.go:1-20`). Slash commands and streaming builders keep the UI responsive while the runtime streams agent outputs (`app/relurpish/tui/commands.go:1-140`, `app/relurpish/tui/streaming.go:1-195`).
+- **API & editor surface** – `server.APIServer` exposes `/api/task` and `/api/context` endpoints so automation harnesses can post instructions, while `/api/task` uses the shared context for incremental state (`server/api.go:1-83`). `server.LSPServer` wires editor open/change events, LSP metadata, and `/ai.*` commands (complete/explain/refactor) into the same agent runtime plus tool proxy layer so editors get the same multi-mode agents as the CLI (`server/lsp_server.go:1-177`).
