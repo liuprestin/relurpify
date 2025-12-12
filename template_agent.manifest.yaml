@@ -45,6 +45,8 @@ spec:
         hitl_required: true # Require approval for installing packages
       - binary: "bash"
         args: ["-c"]
+      - binary: "touch"
+      - binary: "echo"
     
     # Network Access
     network:
