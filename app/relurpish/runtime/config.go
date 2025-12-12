@@ -38,17 +38,18 @@ func DefaultConfig() Config {
 		cwd = "."
 	}
 	cfgDir := filepath.Join(cwd, "relurpify_cfg")
+	logsDir := filepath.Join(cfgDir, "logs")
 	return Config{
 		Workspace:     cwd,
 		ManifestPath:  filepath.Join(cfgDir, "agent.manifest.yaml"),
 		AgentsDir:     filepath.Join(cfgDir, "agents"),
-		MemoryPath:    filepath.Join(cwd, ".relurpish", "memory"),
-		LogPath:       filepath.Join(cwd, ".relurpish", "relurpish.log"),
+		MemoryPath:    filepath.Join(cfgDir, "memory"),
+		LogPath:       filepath.Join(logsDir, "relurpish.log"),
 		TelemetryPath: filepath.Join(cfgDir, "telemetry.jsonl"),
 		ConfigPath:    filepath.Join(cfgDir, "config.yaml"),
 		ServerAddr:    ":8080",
 		AuditLimit:    512,
-		HITLTimeout:  45 * time.Second,
+		HITLTimeout:   45 * time.Second,
 		Sandbox: framework.SandboxConfig{
 			RunscPath:        "runsc",
 			ContainerRuntime: "docker",
@@ -84,25 +85,25 @@ func (c *Config) Normalize() error {
 		c.AgentsDir = filepath.Join(c.Workspace, c.AgentsDir)
 	}
 	if c.MemoryPath == "" {
-		c.MemoryPath = filepath.Join(c.Workspace, ".relurpish", "memory")
+		c.MemoryPath = filepath.Join(configDir, "memory")
 	}
 	if !filepath.IsAbs(c.MemoryPath) {
 		c.MemoryPath = filepath.Join(c.Workspace, c.MemoryPath)
 	}
 	if c.LogPath == "" {
-		c.LogPath = filepath.Join(c.Workspace, ".relurpish", "relurpish.log")
+		c.LogPath = filepath.Join(configDir, "logs", "relurpish.log")
 	}
 	if !filepath.IsAbs(c.LogPath) {
 		c.LogPath = filepath.Join(c.Workspace, c.LogPath)
 	}
 	if c.TelemetryPath == "" {
-		c.TelemetryPath = filepath.Join(c.Workspace, ".relurpish", "telemetry.jsonl")
+		c.TelemetryPath = filepath.Join(configDir, "telemetry.jsonl")
 	}
 	if !filepath.IsAbs(c.TelemetryPath) {
 		c.TelemetryPath = filepath.Join(c.Workspace, c.TelemetryPath)
 	}
 	if c.ConfigPath == "" {
-		c.ConfigPath = filepath.Join(configDir, "agent.manifest.yaml")
+		c.ConfigPath = filepath.Join(configDir, "config.yaml")
 	}
 	if !filepath.IsAbs(c.ConfigPath) {
 		c.ConfigPath = filepath.Join(c.Workspace, c.ConfigPath)
