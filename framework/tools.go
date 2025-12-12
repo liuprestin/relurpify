@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Tool defines capabilities accessible to agents. Each implementation can wrap
@@ -51,6 +52,7 @@ type ToolRegistry struct {
 	tools             map[string]Tool
 	permissionManager *PermissionManager
 	registeredAgentID string
+	telemetry         Telemetry
 }
 
 // NewToolRegistry builds a registry instance.
@@ -103,23 +105,30 @@ func (r *ToolRegistry) UsePermissionManager(agentID string, manager *PermissionM
 	r.permissionManager = manager
 	r.registeredAgentID = agentID
 	for name, tool := range r.tools {
-		// Unwrap secureTool to get the inner tool if needed, 
-		// but here we just check the interface on the stored tool 
-		// (which might be secureTool, so we need to be careful).
-		// wrapTool handles wrapping, but we need to inject into the *inner* tool.
-		// Since r.tools stores the *wrapped* tool after Register/UsePermissionManager,
-		// we need to access the underlying tool if it's already wrapped.
-		
 		var inner Tool = tool
-		if secure, ok := tool.(*secureTool); ok {
-			inner = secure.Tool
+		if instrumented, ok := tool.(*instrumentedTool); ok {
+			inner = instrumented.Tool
+			instrumented.manager = manager
+			instrumented.agentID = agentID
 		}
-		
 		if aware, ok := inner.(PermissionAware); ok {
 			aware.SetPermissionManager(manager, agentID)
 		}
-		
-		// If it wasn't wrapped yet, wrap it. If it was, wrapTool handles re-wrapping (updating fields).
+		r.tools[name] = r.wrapTool(inner)
+	}
+}
+
+// UseTelemetry wires a telemetry sink for all tool executions.
+func (r *ToolRegistry) UseTelemetry(telemetry Telemetry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.telemetry = telemetry
+	for name, tool := range r.tools {
+		var inner Tool = tool
+		if instrumented, ok := tool.(*instrumentedTool); ok {
+			inner = instrumented.Tool
+			instrumented.telemetry = telemetry
+		}
 		r.tools[name] = r.wrapTool(inner)
 	}
 }
@@ -146,40 +155,81 @@ func (r *ToolRegistry) RestrictTo(allowed []string) {
 	}
 }
 
-// wrapTool decorates a tool with the secure wrapper when a permission manager
-// is active so every execution path consistently enforces authorization.
+// wrapTool decorates a tool with the instrumentation wrapper so permissions
+// and telemetry remain consistent regardless of who calls the tool.
 func (r *ToolRegistry) wrapTool(tool Tool) Tool {
 	if tool == nil {
 		return nil
 	}
-	if existing, ok := tool.(*secureTool); ok {
+	if existing, ok := tool.(*instrumentedTool); ok {
 		existing.manager = r.permissionManager
 		existing.agentID = r.registeredAgentID
+		existing.telemetry = r.telemetry
 		return existing
 	}
-	if r.permissionManager == nil {
-		return tool
-	}
-	return &secureTool{
-		Tool:    tool,
-		manager: r.permissionManager,
-		agentID: r.registeredAgentID,
+	return &instrumentedTool{
+		Tool:      tool,
+		manager:   r.permissionManager,
+		agentID:   r.registeredAgentID,
+		telemetry: r.telemetry,
 	}
 }
 
-type secureTool struct {
+type instrumentedTool struct {
 	Tool
-	manager *PermissionManager
-	agentID string
+	manager   *PermissionManager
+	agentID   string
+	telemetry Telemetry
 }
 
 // Execute authorizes the wrapped tool before delegating to the original
 // implementation to ensure permission checks happen even for direct callers.
-func (t *secureTool) Execute(ctx context.Context, state *Context, args map[string]interface{}) (*ToolResult, error) {
+func (t *instrumentedTool) Execute(ctx context.Context, state *Context, args map[string]interface{}) (*ToolResult, error) {
 	if t.manager != nil {
 		if err := t.manager.AuthorizeTool(ctx, t.agentID, t.Tool, args); err != nil {
 			return nil, err
 		}
 	}
-	return t.Tool.Execute(ctx, state, args)
+	if t.telemetry != nil {
+		t.telemetry.Emit(Event{
+			Type:      EventToolCall,
+			Timestamp: time.Now().UTC(),
+			Message:   fmt.Sprintf("tool %s invoked", t.Tool.Name()),
+			Metadata: map[string]interface{}{
+				"tool":     t.Tool.Name(),
+				"agent_id": t.agentID,
+				"args":     summarizeArgs(args),
+			},
+		})
+	}
+	result, err := t.Tool.Execute(ctx, state, args)
+	if t.telemetry != nil {
+		metadata := map[string]interface{}{
+			"tool":     t.Tool.Name(),
+			"agent_id": t.agentID,
+		}
+		if result != nil {
+			metadata["success"] = result.Success
+			if result.Error != "" {
+				metadata["tool_error"] = result.Error
+			}
+		}
+		if err != nil {
+			metadata["error"] = err.Error()
+		}
+		t.telemetry.Emit(Event{
+			Type:      EventToolResult,
+			Timestamp: time.Now().UTC(),
+			Message:   fmt.Sprintf("tool %s completed", t.Tool.Name()),
+			Metadata:  metadata,
+		})
+	}
+	return result, err
+}
+
+func summarizeArgs(args map[string]interface{}) interface{} {
+	if len(args) == 0 {
+		return nil
+	}
+	return fmt.Sprintf("%v", args)
 }
