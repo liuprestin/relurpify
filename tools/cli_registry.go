@@ -13,14 +13,27 @@ import (
 
 // CommandLineTools exposes the default Unix-style CLI helpers.
 func CommandLineTools(basePath string, runner framework.CommandRunner) []framework.Tool {
+	sourceGroups := [][]framework.Tool{
+		clitext.Tools(basePath),
+		clifileops.Tools(basePath),
+		clisystem.Tools(basePath),
+		clibuild.Tools(basePath),
+		cliarchive.Tools(basePath),
+		clinetwork.Tools(basePath),
+		clischeduler.Tools(basePath),
+	}
+	seen := make(map[string]struct{})
 	var res []framework.Tool
-	res = append(res, clitext.Tools(basePath)...)
-	res = append(res, clifileops.Tools(basePath)...)
-	res = append(res, clisystem.Tools(basePath)...)
-	res = append(res, clibuild.Tools(basePath)...)
-	res = append(res, cliarchive.Tools(basePath)...)
-	res = append(res, clinetwork.Tools(basePath)...)
-	res = append(res, clischeduler.Tools(basePath)...)
+	for _, group := range sourceGroups {
+		for _, tool := range group {
+			name := tool.Name()
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			res = append(res, tool)
+		}
+	}
 	for i, tool := range res {
 		if setter, ok := tool.(interface{ SetCommandRunner(framework.CommandRunner) }); ok {
 			setter.SetCommandRunner(runner)
