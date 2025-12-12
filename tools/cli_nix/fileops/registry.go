@@ -13,5 +13,7 @@ func Tools(basePath string) []framework.Tool {
 		NewTreeTool(basePath),
 		NewStatTool(basePath),
 		NewFileTool(basePath),
+		NewTouchTool(basePath),
+		NewMkdirTool(basePath),
 	}
 }
