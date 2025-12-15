@@ -232,7 +232,7 @@ func handleReject(m Model, args []string) (Model, tea.Cmd) {
 }
 
 func handleHITL(m Model, args []string) (Model, tea.Cmd) {
-	return m, summarizePendingHITL(m.runtime)
+	return m, summarizePendingHITL(m.hitl)
 }
 
 func handleMode(m Model, args []string) (Model, tea.Cmd) {
