@@ -3,6 +3,7 @@ package ast
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,7 @@ type IndexManager struct {
 	indexing         map[string]bool
 	config           IndexConfig
 	symbolProvider   DocumentSymbolProvider
+	pathFilter       func(path string, isDir bool) bool
 }
 
 // NewIndexManager builds a manager with default parsers.
@@ -64,8 +66,22 @@ func (im *IndexManager) UseSymbolProvider(provider DocumentSymbolProvider) {
 	im.symbolProvider = provider
 }
 
+// SetPathFilter installs an optional filter that can skip directories/files
+// during indexing (e.g. to enforce manifest filesystem permissions).
+func (im *IndexManager) SetPathFilter(filter func(path string, isDir bool) bool) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	im.pathFilter = filter
+}
+
 // IndexFile parses and stores AST for a file path.
 func (im *IndexManager) IndexFile(path string) error {
+	im.mu.Lock()
+	filter := im.pathFilter
+	im.mu.Unlock()
+	if filter != nil && !filter(path, false) {
+		return nil
+	}
 	im.mu.Lock()
 	if im.indexing[path] {
 		im.mu.Unlock()
@@ -123,7 +139,16 @@ func (im *IndexManager) IndexWorkspace() error {
 		if err != nil {
 			return err
 		}
+		im.mu.Lock()
+		filter := im.pathFilter
+		im.mu.Unlock()
 		if d.IsDir() {
+			if filter != nil && !filter(path, true) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filter != nil && !filter(path, false) {
 			return nil
 		}
 		if im.shouldIgnore(path) {
@@ -157,7 +182,7 @@ func (im *IndexManager) shouldIgnore(path string) bool {
 func (im *IndexManager) indexFilesSequential(files []string) error {
 	for _, file := range files {
 		if err := im.IndexFile(file); err != nil {
-			fmt.Printf("AST index warning: %v\n", err)
+			log.Printf("AST index warning: %v", err)
 		}
 	}
 	return nil
