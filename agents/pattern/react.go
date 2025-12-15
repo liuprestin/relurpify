@@ -583,6 +583,8 @@ func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*
 			state.Set("react.tool_calls", []framework.ToolCall{})
 		} else if calls, ok := pending.([]framework.ToolCall); ok && len(calls) > 0 {
 			results := make(map[string]interface{})
+			toolErrors := make([]string, 0)
+			overallSuccess := true
 			for _, call := range calls {
 				tool, ok := n.agent.Tools.Get(call.Name)
 				if !ok {
@@ -594,14 +596,29 @@ func (n *reactActNode) Execute(ctx context.Context, state *framework.Context) (*
 					return nil, err
 				}
 				if res != nil {
-					results[call.Name] = res.Data
+					results[call.Name] = map[string]interface{}{
+						"success": res.Success,
+						"data":    res.Data,
+						"error":   res.Error,
+					}
 					appendToolMessage(state, call, res)
 					n.agent.debugf("%s tool=%s result=%v", n.id, call.Name, res.Data)
+					if !res.Success {
+						overallSuccess = false
+						if res.Error != "" {
+							toolErrors = append(toolErrors, fmt.Sprintf("%s: %s", call.Name, res.Error))
+						} else {
+							toolErrors = append(toolErrors, fmt.Sprintf("%s failed", call.Name))
+						}
+					}
 				}
 			}
 			state.Set("react.last_tool_result", results)
 			state.Set("react.tool_calls", []framework.ToolCall{})
-			result := &framework.Result{NodeID: n.id, Success: true, Data: results}
+			result := &framework.Result{NodeID: n.id, Success: overallSuccess, Data: results}
+			if len(toolErrors) > 0 {
+				result.Error = fmt.Errorf("%s", strings.Join(toolErrors, "; "))
+			}
 			state.Set("react.last_result", result)
 			return result, nil
 		}
