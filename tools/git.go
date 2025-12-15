@@ -14,6 +14,19 @@ type GitCommandTool struct {
 	RepoPath string
 	Command  string
 	Runner   framework.CommandRunner
+	manager  *framework.PermissionManager
+	agentID  string
+	spec     *framework.AgentRuntimeSpec
+}
+
+func (t *GitCommandTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *GitCommandTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
+	t.agentID = agentID
 }
 
 func (t *GitCommandTool) Name() string { return "git_" + t.Command }
@@ -107,6 +120,31 @@ func (t *GitCommandTool) runGit(ctx context.Context, args []string) (*framework.
 	if t.Runner == nil {
 		return nil, fmt.Errorf("command runner missing for git tool")
 	}
+	if t.manager != nil {
+		if err := t.manager.CheckExecutable(ctx, t.agentID, "git", args, nil); err != nil {
+			return nil, err
+		}
+	}
+	if t.spec != nil {
+		cmdline := strings.TrimSpace("git " + strings.Join(args, " "))
+		decision, _ := framework.DecideByPatterns(cmdline, t.spec.Bash.AllowPatterns, t.spec.Bash.DenyPatterns, t.spec.Bash.Default)
+		switch decision {
+		case framework.AgentPermissionDeny:
+			return nil, fmt.Errorf("git blocked: denied by bash_permissions")
+		case framework.AgentPermissionAsk:
+			if t.manager == nil {
+				return nil, fmt.Errorf("git blocked: approval required but permission manager missing")
+			}
+			if err := t.manager.RequireApproval(ctx, t.agentID, framework.PermissionDescriptor{
+				Type:         framework.PermissionTypeHITL,
+				Action:       "bash:git",
+				Resource:     cmdline,
+				RequiresHITL: true,
+			}, "bash permission policy", framework.GrantScopeOneTime, framework.RiskLevelMedium, 0); err != nil {
+				return nil, err
+			}
+		}
+	}
 	stdout, stderr, err := t.Runner.Run(ctx, framework.CommandRequest{
 		Workdir: t.RepoPath,
 		Args:    append([]string{"git"}, args...),
@@ -127,6 +165,11 @@ func (t *GitCommandTool) runGit(ctx context.Context, args []string) (*framework.
 func (t *GitCommandTool) IsAvailable(ctx context.Context, state *framework.Context) bool {
 	if t.Runner == nil {
 		return false
+	}
+	if t.manager != nil {
+		if err := t.manager.CheckExecutable(ctx, t.agentID, "git", []string{"rev-parse", "--is-inside-work-tree"}, nil); err != nil {
+			return false
+		}
 	}
 	_, _, err := t.Runner.Run(ctx, framework.CommandRequest{
 		Workdir: t.RepoPath,
