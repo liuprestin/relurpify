@@ -170,7 +170,13 @@ func (g *Graph) ExecuteFromSnapshot(ctx context.Context, state *Context, snapsho
 	}
 
 	taskID := g.extractTaskID(state)
-	g.emit(Event{Type: EventGraphStart, TaskID: taskID, Timestamp: time.Now().UTC()})
+	taskMeta := g.extractTaskMeta(state)
+	g.emit(Event{
+		Type:      EventGraphStart,
+		TaskID:    taskID,
+		Timestamp: time.Now().UTC(),
+		Metadata:  taskMeta,
+	})
 	var execErr error
 	defer func() {
 		status := "success"
@@ -238,7 +244,10 @@ func (g *Graph) run(ctx context.Context, state *Context, current string, reset b
 			TaskID:    taskID,
 			Timestamp: time.Now().UTC(),
 		})
-		result, err := node.Execute(ctx, state)
+		taskType := TaskType(fmt.Sprint(taskMetaValue(state, "task.type")))
+		instruction := fmt.Sprint(taskMetaValue(state, "task.instruction"))
+		nodeCtx := WithTaskContext(ctx, TaskContext{ID: taskID, Type: taskType, Instruction: instruction})
+		result, err := node.Execute(nodeCtx, state)
 		if err != nil {
 			err = fmt.Errorf("node %s execution failed: %w", current, err)
 			g.emit(Event{
@@ -275,6 +284,33 @@ func (g *Graph) run(ctx context.Context, state *Context, current string, reset b
 		current = next
 	}
 	return lastResult, nil
+}
+
+func taskMetaValue(state *Context, key string) interface{} {
+	if state == nil {
+		return nil
+	}
+	if v, ok := state.Get(key); ok {
+		return v
+	}
+	return nil
+}
+
+func (g *Graph) extractTaskMeta(state *Context) map[string]interface{} {
+	if state == nil {
+		return nil
+	}
+	meta := map[string]interface{}{}
+	if v := taskMetaValue(state, "task.type"); v != nil {
+		meta["task_type"] = v
+	}
+	if v := taskMetaValue(state, "task.instruction"); v != nil {
+		meta["instruction"] = v
+	}
+	if v := taskMetaValue(state, "task.source"); v != nil {
+		meta["source"] = v
+	}
+	return meta
 }
 
 func (g *Graph) maybeCheckpoint(taskID, currentNode string, state *Context) {
