@@ -80,8 +80,8 @@ func newStartCmd() *cobra.Command {
 			if modelName == "" {
 				modelName = defaultModelName()
 			}
-			model := llm.NewClient(defaultEndpoint(), modelName)
-			model.SetDebugLogging(logLLM)
+			client := llm.NewClient(defaultEndpoint(), modelName)
+			client.SetDebugLogging(logLLM)
 			runtimeCfg := runtime.DefaultConfig()
 			runtimeCfg.Workspace = ws
 			runtimeCfg.ManifestPath = manifest.SourcePath
@@ -102,11 +102,18 @@ func newStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			tools, err := runtime.BuildToolRegistry(ws, runner)
+			tools, err := runtime.BuildToolRegistry(ws, runner, runtime.ToolRegistryOptions{
+				AgentID:           registration.ID,
+				PermissionManager: registration.Permissions,
+				AgentSpec:         spec,
+			})
 			if err != nil {
 				return err
 			}
-			tools.UseTelemetry(framework.LoggerTelemetry{Logger: log.Default()})
+			framework.RestrictToolRegistryByMatrix(tools, spec.Tools)
+			tools.UseAgentSpec(registration.ID, spec)
+			telemetry := framework.LoggerTelemetry{Logger: log.Default()}
+			tools.UseTelemetry(telemetry)
 			if registration.Permissions != nil {
 				tools.UsePermissionManager(registration.ID, registration.Permissions)
 			}
@@ -116,7 +123,7 @@ func newStartCmd() *cobra.Command {
 				return err
 			}
 			agent := &agents.CodingAgent{
-				Model:  model,
+				Model:  llm.NewInstrumentedModel(client, telemetry, logLLM),
 				Tools:  tools,
 				Memory: memory,
 			}
@@ -126,6 +133,7 @@ func newStartCmd() *cobra.Command {
 				OllamaEndpoint:    defaultEndpoint(),
 				MaxIterations:     8,
 				OllamaToolCalling: spec.ToolCallingEnabled(),
+				AgentSpec:         spec,
 				DebugLLM:          logLLM,
 				DebugAgent:        logAgent,
 			}
@@ -142,7 +150,11 @@ func newStartCmd() *cobra.Command {
 					"mode": mode,
 				},
 			}
-			result, err := agent.Execute(ctx, task, framework.NewContext())
+			state := framework.NewContext()
+			state.Set("task.id", task.ID)
+			state.Set("task.type", string(task.Type))
+			state.Set("task.instruction", task.Instruction)
+			result, err := agent.Execute(ctx, task, state)
 			if err != nil {
 				return err
 			}
