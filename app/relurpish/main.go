@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -144,6 +145,10 @@ func runTUI(ctx context.Context, rt *runtimesvc.Runtime) error {
 			return err
 		}
 		defer stop(context.Background())
+	}
+	// Prevent stdlib logger output (used by some debug paths) from drawing over the TUI.
+	if rt != nil && rt.Logger != nil {
+		log.SetOutput(rt.Logger.Writer())
 	}
 	return tui.Run(ctx, rt)
 }
