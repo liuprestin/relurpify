@@ -14,6 +14,13 @@ import (
 // GrepTool implements plain text search.
 type GrepTool struct {
 	BasePath string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *GrepTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *GrepTool) Name() string        { return "search_grep" }
@@ -31,6 +38,11 @@ func (t *GrepTool) Execute(ctx context.Context, state *framework.Context, args m
 		root = "."
 	}
 	root = preparePath(t.BasePath, root)
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, root); err != nil {
+			return nil, err
+		}
+	}
 	pattern := strings.ToLower(fmt.Sprint(args["pattern"]))
 	type match struct {
 		File    string `json:"file"`
@@ -46,7 +58,17 @@ func (t *GrepTool) Execute(ctx context.Context, state *framework.Context, args m
 			if strings.Contains(path, string(filepath.Separator)+".git") {
 				return filepath.SkipDir
 			}
+			if t.manager != nil {
+				if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, path); err != nil {
+					return filepath.SkipDir
+				}
+			}
 			return nil
+		}
+		if t.manager != nil {
+			if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
+				return nil
+			}
 		}
 		file, err := os.Open(path)
 		if err != nil {
@@ -78,6 +100,13 @@ func (t *GrepTool) Permissions() framework.ToolPermissions {
 // SimilarityTool finds similar snippets using a naive approach.
 type SimilarityTool struct {
 	BasePath string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *SimilarityTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *SimilarityTool) Name() string        { return "search_find_similar" }
@@ -91,6 +120,11 @@ func (t *SimilarityTool) Parameters() []framework.ToolParameter {
 }
 func (t *SimilarityTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	root := preparePath(t.BasePath, fmt.Sprint(args["directory"]))
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, root); err != nil {
+			return nil, err
+		}
+	}
 	target := sanitizeSnippet(fmt.Sprint(args["snippet"]))
 	type match struct {
 		File     string  `json:"file"`
@@ -103,7 +137,17 @@ func (t *SimilarityTool) Execute(ctx context.Context, state *framework.Context, 
 			if err == nil && info.IsDir() && strings.Contains(path, ".git") {
 				return filepath.SkipDir
 			}
+			if err == nil && info != nil && info.IsDir() && t.manager != nil {
+				if perr := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, path); perr != nil {
+					return filepath.SkipDir
+				}
+			}
 			return err
+		}
+		if t.manager != nil {
+			if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
+				return nil
+			}
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -130,6 +174,13 @@ func (t *SimilarityTool) Permissions() framework.ToolPermissions {
 // SemanticSearchTool uses a vector-like heuristic (currently substring).
 type SemanticSearchTool struct {
 	BasePath string
+	manager  *framework.PermissionManager
+	agentID  string
+}
+
+func (t *SemanticSearchTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *SemanticSearchTool) Name() string { return "search_semantic" }
@@ -143,6 +194,11 @@ func (t *SemanticSearchTool) Parameters() []framework.ToolParameter {
 func (t *SemanticSearchTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	query := strings.ToLower(fmt.Sprint(args["query"]))
 	var hits []map[string]interface{}
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, t.BasePath); err != nil {
+			return nil, err
+		}
+	}
 	err := filepath.Walk(t.BasePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -151,7 +207,17 @@ func (t *SemanticSearchTool) Execute(ctx context.Context, state *framework.Conte
 			if strings.Contains(path, ".git") {
 				return filepath.SkipDir
 			}
+			if t.manager != nil {
+				if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, path); err != nil {
+					return filepath.SkipDir
+				}
+			}
 			return nil
+		}
+		if t.manager != nil {
+			if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
+				return nil
+			}
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
