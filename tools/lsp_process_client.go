@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lexcodex/relurpify/framework"
 	"github.com/sourcegraph/jsonrpc2"
 	"go.lsp.dev/protocol"
 )
@@ -37,10 +38,18 @@ type processLSPClient struct {
 	openedFiles map[protocol.DocumentURI]bool
 	diagnostics map[protocol.DocumentURI][]protocol.Diagnostic
 	logCh       chan string
+	manager     *framework.PermissionManager
+	agentID     string
+	spec        *framework.AgentRuntimeSpec
 }
 
 // NewProcessLSPClient launches the configured language server and performs the LSP handshake.
 func NewProcessLSPClient(cfg ProcessLSPConfig) (LSPClient, error) {
+	return NewProcessLSPClientWithPermissions(cfg, nil, "", nil)
+}
+
+// NewProcessLSPClientWithPermissions enforces manifest-derived policies before starting the LSP server.
+func NewProcessLSPClientWithPermissions(cfg ProcessLSPConfig, manager *framework.PermissionManager, agentID string, spec *framework.AgentRuntimeSpec) (LSPClient, error) {
 	if cfg.Command == "" {
 		return nil, errors.New("command is required for LSP client")
 	}
@@ -57,6 +66,36 @@ func NewProcessLSPClient(cfg ProcessLSPConfig) (LSPClient, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	if manager != nil {
+		if err := manager.CheckExecutable(ctx, agentID, cfg.Command, cfg.Args, nil); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
+	if spec != nil {
+		cmdline := strings.TrimSpace(cfg.Command + " " + strings.Join(cfg.Args, " "))
+		decision, _ := framework.DecideByPatterns(cmdline, spec.Bash.AllowPatterns, spec.Bash.DenyPatterns, spec.Bash.Default)
+		switch decision {
+		case framework.AgentPermissionDeny:
+			cancel()
+			return nil, fmt.Errorf("lsp %s blocked: denied by bash_permissions", cfg.Command)
+		case framework.AgentPermissionAsk:
+			if manager == nil {
+				cancel()
+				return nil, fmt.Errorf("lsp %s blocked: approval required but permission manager missing", cfg.Command)
+			}
+			if err := manager.RequireApproval(ctx, agentID, framework.PermissionDescriptor{
+				Type:         framework.PermissionTypeHITL,
+				Action:       "bash:lsp",
+				Resource:     cmdline,
+				RequiresHITL: true,
+			}, "bash permission policy", framework.GrantScopeOneTime, framework.RiskLevelMedium, 0); err != nil {
+				cancel()
+				return nil, err
+			}
+		}
+	}
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 	cmd.Dir = absRoot
 
@@ -87,6 +126,9 @@ func NewProcessLSPClient(cfg ProcessLSPConfig) (LSPClient, error) {
 		openedFiles: make(map[protocol.DocumentURI]bool),
 		diagnostics: make(map[protocol.DocumentURI][]protocol.Diagnostic),
 		logCh:       make(chan string, 256),
+		manager:     manager,
+		agentID:     agentID,
+		spec:        spec,
 	}
 
 	handler := jsonrpc2.HandlerWithError(func(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (interface{}, error) {
@@ -222,6 +264,11 @@ func (c *processLSPClient) ensureOpen(ctx context.Context, file string) error {
 	c.openedFiles[uri] = true
 	c.mu.Unlock()
 
+	if c != nil && c.manager != nil {
+		if err := c.manager.CheckFileAccess(ctx, c.agentID, framework.FileSystemRead, file); err != nil {
+			return err
+		}
+	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return err
@@ -255,7 +302,7 @@ func (c *processLSPClient) GetDefinition(ctx context.Context, req DefinitionRequ
 		return DefinitionResult{}, errors.New("definition not found")
 	}
 	loc := resp[0]
-	snippet, _ := readSnippet(uriToPath(string(loc.URI)), loc.Range)
+	snippet, _ := c.readSnippet(uriToPath(string(loc.URI)), loc.Range)
 	return DefinitionResult{
 		Location: Location{
 			URI:   string(loc.URI),
@@ -457,7 +504,12 @@ func uriToPath(uri string) string {
 	return filepath.FromSlash(uri)
 }
 
-func readSnippet(path string, rng protocol.Range) (string, error) {
+func (c *processLSPClient) readSnippet(path string, rng protocol.Range) (string, error) {
+	if c != nil && c.manager != nil {
+		if err := c.manager.CheckFileAccess(context.Background(), c.agentID, framework.FileSystemRead, path); err != nil {
+			return "", err
+		}
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
