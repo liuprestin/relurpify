@@ -2,6 +2,7 @@ package framework
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -36,6 +37,12 @@ type PermissionAware interface {
 	SetPermissionManager(manager *PermissionManager, agentID string)
 }
 
+// AgentSpecAware allows tools to consume the agent manifest runtime spec for
+// additional policy enforcement (e.g. bash/file matrices).
+type AgentSpecAware interface {
+	SetAgentSpec(spec *AgentRuntimeSpec, agentID string)
+}
+
 // ToolResult is returned by every tool execution.
 type ToolResult struct {
 	Success  bool
@@ -52,13 +59,16 @@ type ToolRegistry struct {
 	tools             map[string]Tool
 	permissionManager *PermissionManager
 	registeredAgentID string
+	agentSpec         *AgentRuntimeSpec
+	toolPolicies      map[string]ToolPolicy
 	telemetry         Telemetry
 }
 
 // NewToolRegistry builds a registry instance.
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
-		tools: make(map[string]Tool),
+		tools:        make(map[string]Tool),
+		toolPolicies: make(map[string]ToolPolicy),
 	}
 }
 
@@ -69,10 +79,20 @@ func (r *ToolRegistry) Register(tool Tool) error {
 	if _, exists := r.tools[tool.Name()]; exists {
 		return fmt.Errorf("tool %s already registered", tool.Name())
 	}
+	if policy, ok := r.toolPolicies[tool.Name()]; ok {
+		if policy.Visible != nil && !*policy.Visible {
+			return nil
+		}
+	}
 	// If we already have a manager, inject it immediately
 	if r.permissionManager != nil {
 		if aware, ok := tool.(PermissionAware); ok {
 			aware.SetPermissionManager(r.permissionManager, r.registeredAgentID)
+		}
+	}
+	if r.agentSpec != nil {
+		if aware, ok := tool.(AgentSpecAware); ok {
+			aware.SetAgentSpec(r.agentSpec, r.registeredAgentID)
 		}
 	}
 	r.tools[tool.Name()] = r.wrapTool(tool)
@@ -113,6 +133,45 @@ func (r *ToolRegistry) UsePermissionManager(agentID string, manager *PermissionM
 		}
 		if aware, ok := inner.(PermissionAware); ok {
 			aware.SetPermissionManager(manager, agentID)
+		}
+		if aware, ok := inner.(AgentSpecAware); ok && r.agentSpec != nil {
+			aware.SetAgentSpec(r.agentSpec, agentID)
+		}
+		r.tools[name] = r.wrapTool(inner)
+	}
+}
+
+// UseAgentSpec wires per-tool policies and other manifest-driven knobs into
+// the registry and any tools that opt in.
+func (r *ToolRegistry) UseAgentSpec(agentID string, spec *AgentRuntimeSpec) {
+	if spec == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registeredAgentID = agentID
+	r.agentSpec = spec
+	if spec.ToolPolicies != nil {
+		r.toolPolicies = make(map[string]ToolPolicy, len(spec.ToolPolicies))
+		for name, pol := range spec.ToolPolicies {
+			r.toolPolicies[name] = pol
+		}
+	}
+	// Apply visibility policies by removing hidden tools.
+	for name, pol := range r.toolPolicies {
+		if pol.Visible != nil && !*pol.Visible {
+			delete(r.tools, name)
+		}
+	}
+	for name, tool := range r.tools {
+		var inner Tool = tool
+		if instrumented, ok := tool.(*instrumentedTool); ok {
+			inner = instrumented.Tool
+			instrumented.policy = r.toolPolicies[inner.Name()]
+			instrumented.hasPolicy = true
+		}
+		if aware, ok := inner.(AgentSpecAware); ok {
+			aware.SetAgentSpec(spec, agentID)
 		}
 		r.tools[name] = r.wrapTool(inner)
 	}
@@ -165,6 +224,8 @@ func (r *ToolRegistry) wrapTool(tool Tool) Tool {
 		existing.manager = r.permissionManager
 		existing.agentID = r.registeredAgentID
 		existing.telemetry = r.telemetry
+		existing.policy = r.toolPolicies[existing.Tool.Name()]
+		existing.hasPolicy = r.agentSpec != nil
 		return existing
 	}
 	return &instrumentedTool{
@@ -172,6 +233,8 @@ func (r *ToolRegistry) wrapTool(tool Tool) Tool {
 		manager:   r.permissionManager,
 		agentID:   r.registeredAgentID,
 		telemetry: r.telemetry,
+		policy:    r.toolPolicies[tool.Name()],
+		hasPolicy: r.agentSpec != nil,
 	}
 }
 
@@ -180,13 +243,37 @@ type instrumentedTool struct {
 	manager   *PermissionManager
 	agentID   string
 	telemetry Telemetry
+	policy    ToolPolicy
+	hasPolicy bool
 }
 
 // Execute authorizes the wrapped tool before delegating to the original
 // implementation to ensure permission checks happen even for direct callers.
 func (t *instrumentedTool) Execute(ctx context.Context, state *Context, args map[string]interface{}) (*ToolResult, error) {
+	if t.hasPolicy {
+		switch t.policy.Execute {
+		case AgentPermissionDeny:
+			return nil, fmt.Errorf("tool %s blocked: execution denied by policy", t.Tool.Name())
+		case AgentPermissionAsk:
+			if t.manager == nil {
+				return nil, fmt.Errorf("tool %s blocked: approval required but permission manager missing", t.Tool.Name())
+			}
+			if err := t.manager.RequireApproval(ctx, t.agentID, PermissionDescriptor{
+				Type:         PermissionTypeHITL,
+				Action:       fmt.Sprintf("tool_exec:%s", t.Tool.Name()),
+				Resource:     t.agentID,
+				RequiresHITL: true,
+			}, "tool execution approval", GrantScopeOneTime, RiskLevelMedium, 0); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if t.manager != nil {
 		if err := t.manager.AuthorizeTool(ctx, t.agentID, t.Tool, args); err != nil {
+			var denied *PermissionDeniedError
+			if errors.As(err, &denied) {
+				return nil, fmt.Errorf("tool %s blocked: %w", t.Tool.Name(), err)
+			}
 			return nil, err
 		}
 	}
@@ -203,6 +290,12 @@ func (t *instrumentedTool) Execute(ctx context.Context, state *Context, args map
 		})
 	}
 	result, err := t.Tool.Execute(ctx, state, args)
+	if err != nil {
+		var denied *PermissionDeniedError
+		if errors.As(err, &denied) {
+			err = fmt.Errorf("tool %s blocked: %w", t.Tool.Name(), err)
+		}
+	}
 	if t.telemetry != nil {
 		metadata := map[string]interface{}{
 			"tool":     t.Tool.Name(),
