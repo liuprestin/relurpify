@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lexcodex/relurpify/framework"
@@ -25,6 +26,9 @@ type CommandTool struct {
 	cfg      CommandToolConfig
 	basePath string
 	runner   framework.CommandRunner
+	manager  *framework.PermissionManager
+	agentID  string
+	spec     *framework.AgentRuntimeSpec
 }
 
 // NewCommandTool builds a reusable CLI wrapper.
@@ -44,6 +48,17 @@ func (t *CommandTool) Category() string    { return t.cfg.Category }
 func (t *CommandTool) SetCommandRunner(r framework.CommandRunner) {
 	t.runner = r
 }
+
+func (t *CommandTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *CommandTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
+	t.agentID = agentID
+}
+
 func (t *CommandTool) Parameters() []framework.ToolParameter {
 	return []framework.ToolParameter{
 		{Name: "args", Type: "array", Required: false, Description: "Arguments passed to the CLI tool."},
@@ -62,6 +77,31 @@ func (t *CommandTool) Execute(ctx context.Context, state *framework.Context, arg
 	}
 	finalArgs := append([]string{}, t.cfg.DefaultArgs...)
 	finalArgs = append(finalArgs, userArgs...)
+	if t.manager != nil {
+		if err := t.manager.CheckExecutable(ctx, t.agentID, t.cfg.Command, finalArgs, nil); err != nil {
+			return nil, err
+		}
+	}
+	if t.spec != nil {
+		cmdline := strings.TrimSpace(t.cfg.Command + " " + strings.Join(finalArgs, " "))
+		decision, _ := framework.DecideByPatterns(cmdline, t.spec.Bash.AllowPatterns, t.spec.Bash.DenyPatterns, t.spec.Bash.Default)
+		switch decision {
+		case framework.AgentPermissionDeny:
+			return nil, fmt.Errorf("command blocked: denied by bash_permissions")
+		case framework.AgentPermissionAsk:
+			if t.manager == nil {
+				return nil, fmt.Errorf("command blocked: approval required but permission manager missing")
+			}
+			if err := t.manager.RequireApproval(ctx, t.agentID, framework.PermissionDescriptor{
+				Type:         framework.PermissionTypeHITL,
+				Action:       "bash:cli",
+				Resource:     cmdline,
+				RequiresHITL: true,
+			}, "bash permission policy", framework.GrantScopeOneTime, framework.RiskLevelMedium, 0); err != nil {
+				return nil, err
+			}
+		}
+	}
 	workdir := t.basePath
 	if raw, ok := args["working_directory"]; ok && raw != nil {
 		path := fmt.Sprint(raw)
