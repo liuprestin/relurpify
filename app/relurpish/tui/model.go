@@ -38,6 +38,9 @@ func Run(ctx context.Context, rt *runtimesvc.Runtime) error {
 type Model struct {
 	runtime *runtimesvc.Runtime
 	config  runtimesvc.Config
+	hitl    hitlService
+	hitlCh  <-chan framework.HITLEvent
+	hitlOff func()
 
 	feed  *viewport.Model
 	input textinput.Model
@@ -61,6 +64,12 @@ type Model struct {
 
 	focusIndex int
 	autoFollow bool
+
+	// HITL prompt state (temporarily replaces normal prompt)
+	hitlRequest        *framework.PermissionRequest
+	hitlPreviousMode   InputMode
+	hitlPreviousValue  string
+	hitlPreviousPrompt string
 }
 
 // InputMode tracks the role of the prompt bar.
@@ -70,6 +79,7 @@ const (
 	ModeNormal InputMode = iota
 	ModeCommand
 	ModeFilePicker
+	ModeHITL
 )
 
 // Message structures mirror the specification for rendering rich agent output.
@@ -240,6 +250,12 @@ func (ac *AgentContext) List() []string {
 // NewModel initializes the prompt/input/feed model with defaults from runtime.
 func NewModel(rt *runtimesvc.Runtime) Model {
 	cfg := rt.Config
+	hitlSvc := hitlServiceFromRuntime(rt)
+	var hitlCh <-chan framework.HITLEvent
+	var hitlOff func()
+	if hitlSvc != nil {
+		hitlCh, hitlOff = hitlSvc.SubscribeHITL()
+	}
 	input := textinput.New()
 	input.Placeholder = "Type a message or /help for commands"
 	input.Focus()
@@ -296,6 +312,9 @@ func NewModel(rt *runtimesvc.Runtime) Model {
 	return Model{
 		runtime:    rt,
 		config:     cfg,
+		hitl:       hitlSvc,
+		hitlCh:     hitlCh,
+		hitlOff:    hitlOff,
 		feed:       vp,
 		input:      input,
 		spinner:    sp,
@@ -306,6 +325,35 @@ func NewModel(rt *runtimesvc.Runtime) Model {
 		mode:       ModeNormal,
 		autoFollow: true,
 	}
+}
+
+func (m Model) enterHITL(req *framework.PermissionRequest) Model {
+	if req == nil {
+		return m
+	}
+	if m.mode != ModeHITL {
+		m.hitlPreviousMode = m.mode
+		m.hitlPreviousValue = m.input.Value()
+		m.hitlPreviousPrompt = m.input.Placeholder
+	}
+	m.hitlRequest = req
+	m.mode = ModeHITL
+	m.input.SetValue("")
+	m.input.Placeholder = ""
+	m.input.Focus()
+	return m
+}
+
+func (m Model) exitHITL() Model {
+	if m.mode != ModeHITL {
+		return m
+	}
+	m.hitlRequest = nil
+	m.mode = m.hitlPreviousMode
+	m.input.Placeholder = m.hitlPreviousPrompt
+	m.input.SetValue(m.hitlPreviousValue)
+	m.input.Focus()
+	return m
 }
 
 // submitPrompt orchestrates sending the current input to the agent runtime.
