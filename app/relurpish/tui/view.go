@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -34,6 +35,7 @@ func (m Model) renderMessages() string {
 func (m Model) renderPromptBar() string {
 	prefix := "> "
 	hint := dimStyle.Render(" / for commands | @ for context | ctrl+l to clear")
+	promptText := ""
 
 	switch m.mode {
 	case ModeCommand:
@@ -42,9 +44,22 @@ func (m Model) renderPromptBar() string {
 	case ModeFilePicker:
 		prefix = "@ "
 		hint = dimStyle.Render(" Enter to add file | Esc to cancel")
+	case ModeHITL:
+		prefix = "! "
+		hint = dimStyle.Render(" y approve | n deny | Esc cancel")
+		if m.hitlRequest != nil {
+			promptText = fmt.Sprintf("Approve %s: %s (%s)?", m.hitlRequest.ID, m.hitlRequest.Permission.Action, m.hitlRequest.Justification)
+		} else {
+			promptText = "Approve pending permission?"
+		}
 	}
 
-	content := prefix + m.input.View()
+	content := prefix
+	if m.mode == ModeHITL {
+		content += promptText
+	} else {
+		content += m.input.View()
+	}
 	if hint != "" {
 		content += " " + hint
 	}
