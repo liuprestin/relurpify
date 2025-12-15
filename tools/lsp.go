@@ -148,6 +148,13 @@ func (p *Proxy) cached(key string, fetch func() (interface{}, error)) (interface
 // DefinitionTool implements the GetDefinition tool.
 type DefinitionTool struct {
 	Proxy *Proxy
+	manager *framework.PermissionManager
+	agentID string
+}
+
+func (t *DefinitionTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 // Name implements Tool.
@@ -173,12 +180,18 @@ func (t *DefinitionTool) Parameters() []framework.ToolParameter {
 
 // Execute implements Tool.
 func (t *DefinitionTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
-	client, err := t.Proxy.clientForFile(fmt.Sprint(args["file"]))
+	file := fmt.Sprint(args["file"])
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, file); err != nil {
+			return nil, err
+		}
+	}
+	client, err := t.Proxy.clientForFile(file)
 	if err != nil {
 		return nil, err
 	}
 	req := DefinitionRequest{
-		File:   fmt.Sprint(args["file"]),
+		File:   file,
 		Symbol: fmt.Sprint(args["symbol"]),
 		Position: Position{
 			Line:      toInt(args["line"]),
@@ -215,6 +228,13 @@ func (t *DefinitionTool) Permissions() framework.ToolPermissions {
 // ReferencesTool implements GetReferences tool.
 type ReferencesTool struct {
 	Proxy *Proxy
+	manager *framework.PermissionManager
+	agentID string
+}
+
+func (t *ReferencesTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *ReferencesTool) Name() string { return "lsp_get_references" }
@@ -231,12 +251,18 @@ func (t *ReferencesTool) Parameters() []framework.ToolParameter {
 	}
 }
 func (t *ReferencesTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
-	client, err := t.Proxy.clientForFile(fmt.Sprint(args["file"]))
+	file := fmt.Sprint(args["file"])
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, file); err != nil {
+			return nil, err
+		}
+	}
+	client, err := t.Proxy.clientForFile(file)
 	if err != nil {
 		return nil, err
 	}
 	req := ReferencesRequest{
-		File:   fmt.Sprint(args["file"]),
+		File:   file,
 		Symbol: fmt.Sprint(args["symbol"]),
 		Position: Position{
 			Line:      toInt(args["line"]),
@@ -268,6 +294,13 @@ func (t *ReferencesTool) Permissions() framework.ToolPermissions {
 // HoverTool implements GetHover.
 type HoverTool struct {
 	Proxy *Proxy
+	manager *framework.PermissionManager
+	agentID string
+}
+
+func (t *HoverTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *HoverTool) Name() string { return "lsp_get_hover" }
@@ -283,12 +316,18 @@ func (t *HoverTool) Parameters() []framework.ToolParameter {
 	}
 }
 func (t *HoverTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
-	client, err := t.Proxy.clientForFile(fmt.Sprint(args["file"]))
+	file := fmt.Sprint(args["file"])
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, file); err != nil {
+			return nil, err
+		}
+	}
+	client, err := t.Proxy.clientForFile(file)
 	if err != nil {
 		return nil, err
 	}
 	req := HoverRequest{
-		File: fmt.Sprint(args["file"]),
+		File: file,
 		Position: Position{
 			Line:      toInt(args["line"]),
 			Character: toInt(args["character"]),
@@ -320,6 +359,13 @@ func (t *HoverTool) Permissions() framework.ToolPermissions {
 // DiagnosticsTool implements diagnostics retrieval.
 type DiagnosticsTool struct {
 	Proxy *Proxy
+	manager *framework.PermissionManager
+	agentID string
+}
+
+func (t *DiagnosticsTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *DiagnosticsTool) Name() string { return "lsp_get_diagnostics" }
@@ -331,12 +377,18 @@ func (t *DiagnosticsTool) Parameters() []framework.ToolParameter {
 	return []framework.ToolParameter{{Name: "file", Type: "string", Required: true}}
 }
 func (t *DiagnosticsTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
-	client, err := t.Proxy.clientForFile(fmt.Sprint(args["file"]))
+	file := fmt.Sprint(args["file"])
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, file); err != nil {
+			return nil, err
+		}
+	}
+	client, err := t.Proxy.clientForFile(file)
 	if err != nil {
 		return nil, err
 	}
-	resAny, err := t.Proxy.cached("diag:"+fmt.Sprint(args["file"]), func() (interface{}, error) {
-		return client.GetDiagnostics(ctx, fmt.Sprint(args["file"]))
+	resAny, err := t.Proxy.cached("diag:"+file, func() (interface{}, error) {
+		return client.GetDiagnostics(ctx, file)
 	})
 	if err != nil {
 		return nil, err
@@ -360,6 +412,13 @@ func (t *DiagnosticsTool) Permissions() framework.ToolPermissions {
 // SearchSymbolsTool implements symbol lookup.
 type SearchSymbolsTool struct {
 	Proxy *Proxy
+	manager *framework.PermissionManager
+	agentID string
+}
+
+func (t *SearchSymbolsTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *SearchSymbolsTool) Name() string { return "lsp_search_symbols" }
@@ -402,6 +461,13 @@ func (t *SearchSymbolsTool) Permissions() framework.ToolPermissions {
 // DocumentSymbolsTool returns structure of a file.
 type DocumentSymbolsTool struct {
 	Proxy *Proxy
+	manager *framework.PermissionManager
+	agentID string
+}
+
+func (t *DocumentSymbolsTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *DocumentSymbolsTool) Name() string { return "lsp_document_symbols" }
@@ -413,12 +479,18 @@ func (t *DocumentSymbolsTool) Parameters() []framework.ToolParameter {
 	return []framework.ToolParameter{{Name: "file", Type: "string", Required: true}}
 }
 func (t *DocumentSymbolsTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
-	client, err := t.Proxy.clientForFile(fmt.Sprint(args["file"]))
+	file := fmt.Sprint(args["file"])
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, file); err != nil {
+			return nil, err
+		}
+	}
+	client, err := t.Proxy.clientForFile(file)
 	if err != nil {
 		return nil, err
 	}
-	resAny, err := t.Proxy.cached("doc_symbols:"+fmt.Sprint(args["file"]), func() (interface{}, error) {
-		return client.GetDocumentSymbols(ctx, fmt.Sprint(args["file"]))
+	resAny, err := t.Proxy.cached("doc_symbols:"+file, func() (interface{}, error) {
+		return client.GetDocumentSymbols(ctx, file)
 	})
 	if err != nil {
 		return nil, err
@@ -442,6 +514,13 @@ func (t *DocumentSymbolsTool) Permissions() framework.ToolPermissions {
 // FormatTool formats code through the LSP.
 type FormatTool struct {
 	Proxy *Proxy
+	manager *framework.PermissionManager
+	agentID string
+}
+
+func (t *FormatTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
 }
 
 func (t *FormatTool) Name() string        { return "lsp_format" }
@@ -454,12 +533,18 @@ func (t *FormatTool) Parameters() []framework.ToolParameter {
 	}
 }
 func (t *FormatTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
-	client, err := t.Proxy.clientForFile(fmt.Sprint(args["file"]))
+	file := fmt.Sprint(args["file"])
+	if t.manager != nil {
+		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, file); err != nil {
+			return nil, err
+		}
+	}
+	client, err := t.Proxy.clientForFile(file)
 	if err != nil {
 		return nil, err
 	}
 	formatted, err := client.Format(ctx, FormatRequest{
-		File: fmt.Sprint(args["file"]),
+		File: file,
 		Code: fmt.Sprint(args["code"]),
 	})
 	if err != nil {
