@@ -21,10 +21,16 @@ type ReadFileTool struct {
 	BasePath string
 	manager  *framework.PermissionManager
 	agentID  string
+	spec     *framework.AgentRuntimeSpec
 }
 
 func (t *ReadFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
 	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *ReadFileTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
 	t.agentID = agentID
 }
 
@@ -36,7 +42,7 @@ func (t *ReadFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *ReadFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
-	
+
 	if t.manager != nil {
 		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
 			return nil, err
@@ -77,10 +83,16 @@ type WriteFileTool struct {
 	Backup   bool
 	manager  *framework.PermissionManager
 	agentID  string
+	spec     *framework.AgentRuntimeSpec
 }
 
 func (t *WriteFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
 	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *WriteFileTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
 	t.agentID = agentID
 }
 
@@ -95,11 +107,18 @@ func (t *WriteFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *WriteFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
-	
+
 	if t.manager != nil {
 		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, path); err != nil {
 			return nil, err
 		}
+	}
+	if err := t.enforceFileMatrix(ctx, "write", path); err != nil {
+		return nil, err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
 	}
 
 	content := []byte(fmt.Sprint(args["content"]))
@@ -110,6 +129,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, state *framework.Context, a
 				if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, backup); err != nil {
 					return nil, fmt.Errorf("backup blocked: %w", err)
 				}
+			}
+			// Apply file matrix rules based on the original path (not the ".bak" suffix).
+			if err := t.enforceFileMatrix(ctx, "write", path); err != nil {
+				return nil, fmt.Errorf("backup blocked: %w", err)
 			}
 			if err := copyFile(path, backup); err != nil {
 				return nil, err
@@ -134,10 +157,16 @@ type ListFilesTool struct {
 	BasePath string
 	manager  *framework.PermissionManager
 	agentID  string
+	spec     *framework.AgentRuntimeSpec
 }
 
 func (t *ListFilesTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
 	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *ListFilesTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
 	t.agentID = agentID
 }
 
@@ -152,7 +181,7 @@ func (t *ListFilesTool) Parameters() []framework.ToolParameter {
 }
 func (t *ListFilesTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	dir := t.preparePath(fmt.Sprint(args["directory"]))
-	
+
 	if t.manager != nil {
 		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, dir); err != nil {
 			return nil, err
@@ -169,16 +198,20 @@ func (t *ListFilesTool) Execute(ctx context.Context, state *framework.Context, a
 			if strings.HasPrefix(d.Name(), ".git") {
 				return fs.SkipDir
 			}
+			if t.manager != nil {
+				if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, path); err != nil {
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
-		
-		// If strict checking is desired for every file encountered:
-		// if t.manager != nil {
-		// 	if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, path); err != nil {
-		// 		return nil // Skip this file? Or fail? Let's just skip it implicitly by checking "list" on root.
-		//      // Standard "ls -R" usually implies ability to read children if parent is readable.
-		// 	}
-		// }
+
+		if t.manager != nil {
+			if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
+				// Skip files we lack explicit read rights for rather than failing the request.
+				return nil
+			}
+		}
 
 		match, _ := filepath.Match(pattern, filepath.Base(path))
 		if match {
@@ -204,10 +237,16 @@ type SearchInFilesTool struct {
 	BasePath string
 	manager  *framework.PermissionManager
 	agentID  string
+	spec     *framework.AgentRuntimeSpec
 }
 
 func (t *SearchInFilesTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
 	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *SearchInFilesTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
 	t.agentID = agentID
 }
 
@@ -222,7 +261,7 @@ func (t *SearchInFilesTool) Parameters() []framework.ToolParameter {
 }
 func (t *SearchInFilesTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	dir := t.preparePath(fmt.Sprint(args["directory"]))
-	
+
 	if t.manager != nil {
 		// Search implies reading files
 		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, dir); err != nil {
@@ -245,10 +284,15 @@ func (t *SearchInFilesTool) Execute(ctx context.Context, state *framework.Contex
 			if strings.HasPrefix(d.Name(), ".git") {
 				return fs.SkipDir
 			}
+			if t.manager != nil {
+				if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemList, path); err != nil {
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
-		
-		// Ideally verify read access for each file
+
+		// Verify read access for each file while walking.
 		if t.manager != nil {
 			if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemRead, path); err != nil {
 				return nil // Skip unreadable
@@ -292,10 +336,16 @@ type CreateFileTool struct {
 	BasePath string
 	manager  *framework.PermissionManager
 	agentID  string
+	spec     *framework.AgentRuntimeSpec
 }
 
 func (t *CreateFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
 	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *CreateFileTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
 	t.agentID = agentID
 }
 
@@ -310,15 +360,21 @@ func (t *CreateFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *CreateFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
-	
+
 	if t.manager != nil {
 		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, path); err != nil {
 			return nil, err
 		}
 	}
+	if err := t.enforceFileMatrix(ctx, "write", path); err != nil {
+		return nil, err
+	}
 
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("file %s already exists", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
 	}
 	if err := os.WriteFile(path, []byte(fmt.Sprint(args["content"])), 0o644); err != nil {
 		return nil, err
@@ -339,10 +395,16 @@ type DeleteFileTool struct {
 	TrashDir string
 	manager  *framework.PermissionManager
 	agentID  string
+	spec     *framework.AgentRuntimeSpec
 }
 
 func (t *DeleteFileTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
 	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *DeleteFileTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
 	t.agentID = agentID
 }
 
@@ -354,11 +416,14 @@ func (t *DeleteFileTool) Parameters() []framework.ToolParameter {
 }
 func (t *DeleteFileTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	path := t.preparePath(fmt.Sprint(args["path"]))
-	
+
 	if t.manager != nil {
 		if err := t.manager.CheckFileAccess(ctx, t.agentID, framework.FileSystemWrite, path); err != nil {
 			return nil, err
 		}
+	}
+	if err := t.enforceFileMatrix(ctx, "write", path); err != nil {
+		return nil, err
 	}
 
 	info, err := os.Stat(path)
@@ -394,6 +459,27 @@ func (t *SearchInFilesTool) preparePath(path string) string {
 }
 func (t *CreateFileTool) preparePath(path string) string { return preparePath(t.BasePath, path) }
 func (t *DeleteFileTool) preparePath(path string) string { return preparePath(t.BasePath, path) }
+
+func (t *WriteFileTool) enforceFileMatrix(ctx context.Context, action string, absPath string) error {
+	if t == nil || t.spec == nil {
+		return nil
+	}
+	return enforceFileMatrix(ctx, t.manager, t.agentID, t.BasePath, action, absPath, t.spec.Files)
+}
+
+func (t *CreateFileTool) enforceFileMatrix(ctx context.Context, action string, absPath string) error {
+	if t == nil || t.spec == nil {
+		return nil
+	}
+	return enforceFileMatrix(ctx, t.manager, t.agentID, t.BasePath, action, absPath, t.spec.Files)
+}
+
+func (t *DeleteFileTool) enforceFileMatrix(ctx context.Context, action string, absPath string) error {
+	if t == nil || t.spec == nil {
+		return nil
+	}
+	return enforceFileMatrix(ctx, t.manager, t.agentID, t.BasePath, action, absPath, t.spec.Files)
+}
 
 func preparePath(base, path string) string {
 	if base == "" {
@@ -432,6 +518,48 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return nil
+}
+
+func enforceFileMatrix(ctx context.Context, manager *framework.PermissionManager, agentID, basePath, action, absPath string, matrix framework.AgentFileMatrix) error {
+	rel := absPath
+	if basePath != "" {
+		if r, err := filepath.Rel(basePath, absPath); err == nil {
+			rel = r
+		}
+	}
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if strings.HasPrefix(rel, "./") {
+		rel = strings.TrimPrefix(rel, "./")
+	}
+	perm := matrix.Write
+	if action == "edit" {
+		perm = matrix.Edit
+	}
+	if perm.DocumentationOnly && !strings.HasSuffix(strings.ToLower(rel), ".md") {
+		return fmt.Errorf("file %s blocked: documentation_only enabled", rel)
+	}
+	decision, _ := framework.DecideByPatterns(rel, perm.AllowPatterns, perm.DenyPatterns, perm.Default)
+	if perm.RequireApproval {
+		decision = framework.AgentPermissionAsk
+	}
+	switch decision {
+	case framework.AgentPermissionAllow:
+		return nil
+	case framework.AgentPermissionDeny:
+		return fmt.Errorf("file %s blocked: denied by file_permissions", rel)
+	case framework.AgentPermissionAsk:
+		if manager == nil {
+			return fmt.Errorf("file %s blocked: approval required but permission manager missing", rel)
+		}
+		return manager.RequireApproval(ctx, agentID, framework.PermissionDescriptor{
+			Type:         framework.PermissionTypeHITL,
+			Action:       fmt.Sprintf("file_matrix:%s", action),
+			Resource:     rel,
+			RequiresHITL: true,
+		}, "file permission matrix", framework.GrantScopeOneTime, framework.RiskLevelMedium, 0)
+	default:
+		return nil
+	}
 }
 
 // FileOperations registers default file tools into a registry.
