@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lexcodex/relurpify/framework"
@@ -14,6 +15,19 @@ type RunTestsTool struct {
 	Workdir string
 	Timeout time.Duration
 	Runner  framework.CommandRunner
+	manager *framework.PermissionManager
+	agentID string
+	spec    *framework.AgentRuntimeSpec
+}
+
+func (t *RunTestsTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *RunTestsTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
+	t.agentID = agentID
 }
 
 func (t *RunTestsTool) Name() string        { return "exec_run_tests" }
@@ -29,6 +43,9 @@ func (t *RunTestsTool) Execute(ctx context.Context, state *framework.Context, ar
 	cmdline := append([]string{}, t.Command...)
 	if pattern != "" {
 		cmdline = append(cmdline, pattern)
+	}
+	if err := t.authorizeCommand(ctx, cmdline); err != nil {
+		return nil, err
 	}
 	stdout, stderr, err := t.run(ctx, cmdline, "")
 	if err != nil {
@@ -57,7 +74,7 @@ func (t *RunTestsTool) Permissions() framework.ToolPermissions {
 	if len(t.Command) == 0 {
 		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead, framework.FileSystemList)}
 	}
-	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
+	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command[1:])}
 }
 
 func (t *RunTestsTool) run(ctx context.Context, args []string, input string) (string, string, error) {
@@ -79,6 +96,19 @@ type ExecuteCodeTool struct {
 	Workdir string
 	Timeout time.Duration
 	Runner  framework.CommandRunner
+	manager *framework.PermissionManager
+	agentID string
+	spec    *framework.AgentRuntimeSpec
+}
+
+func (t *ExecuteCodeTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *ExecuteCodeTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
+	t.agentID = agentID
 }
 
 func (t *ExecuteCodeTool) Name() string { return "exec_run_code" }
@@ -93,7 +123,12 @@ func (t *ExecuteCodeTool) Parameters() []framework.ToolParameter {
 }
 func (t *ExecuteCodeTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
 	code := fmt.Sprint(args["code"])
-	stdout, stderr, err := t.run(ctx, t.Command, code)
+	cmdline := append([]string{}, t.Command...)
+	cmdline = append(cmdline, code)
+	if err := t.authorizeCommand(ctx, cmdline); err != nil {
+		return nil, err
+	}
+	stdout, stderr, err := t.run(ctx, cmdline, "")
 	success := err == nil
 	resultErr := ""
 	if err != nil {
@@ -116,7 +151,7 @@ func (t *ExecuteCodeTool) Permissions() framework.ToolPermissions {
 	if len(t.Command) == 0 {
 		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead)}
 	}
-	perms := framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)
+	perms := framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command[1:])
 	// Arbitrary code execution should always require HITL.
 	for i := range perms.FileSystem {
 		perms.FileSystem[i].HITLRequired = true
@@ -146,6 +181,19 @@ type RunLinterTool struct {
 	Workdir string
 	Timeout time.Duration
 	Runner  framework.CommandRunner
+	manager *framework.PermissionManager
+	agentID string
+	spec    *framework.AgentRuntimeSpec
+}
+
+func (t *RunLinterTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *RunLinterTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
+	t.agentID = agentID
 }
 
 func (t *RunLinterTool) Name() string        { return "exec_run_linter" }
@@ -160,6 +208,9 @@ func (t *RunLinterTool) Execute(ctx context.Context, state *framework.Context, a
 	cmdline := append([]string{}, t.Command...)
 	if path := fmt.Sprint(args["path"]); path != "" {
 		cmdline = append(cmdline, path)
+	}
+	if err := t.authorizeCommand(ctx, cmdline); err != nil {
+		return nil, err
 	}
 	stdout, stderr, err := t.run(ctx, cmdline)
 	success := err == nil
@@ -184,7 +235,7 @@ func (t *RunLinterTool) Permissions() framework.ToolPermissions {
 	if len(t.Command) == 0 {
 		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead)}
 	}
-	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
+	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command[1:])}
 }
 
 func (t *RunLinterTool) run(ctx context.Context, args []string) (string, string, error) {
@@ -205,6 +256,19 @@ type RunBuildTool struct {
 	Workdir string
 	Timeout time.Duration
 	Runner  framework.CommandRunner
+	manager *framework.PermissionManager
+	agentID string
+	spec    *framework.AgentRuntimeSpec
+}
+
+func (t *RunBuildTool) SetPermissionManager(manager *framework.PermissionManager, agentID string) {
+	t.manager = manager
+	t.agentID = agentID
+}
+
+func (t *RunBuildTool) SetAgentSpec(spec *framework.AgentRuntimeSpec, agentID string) {
+	t.spec = spec
+	t.agentID = agentID
 }
 
 func (t *RunBuildTool) Name() string        { return "exec_run_build" }
@@ -214,6 +278,9 @@ func (t *RunBuildTool) Parameters() []framework.ToolParameter {
 	return []framework.ToolParameter{}
 }
 func (t *RunBuildTool) Execute(ctx context.Context, state *framework.Context, args map[string]interface{}) (*framework.ToolResult, error) {
+	if err := t.authorizeCommand(ctx, t.Command); err != nil {
+		return nil, err
+	}
 	stdout, stderr, err := t.run(ctx)
 	success := err == nil
 	errStr := ""
@@ -237,7 +304,7 @@ func (t *RunBuildTool) Permissions() framework.ToolPermissions {
 	if len(t.Command) == 0 {
 		return framework.ToolPermissions{Permissions: framework.NewFileSystemPermissionSet(t.Workdir, framework.FileSystemRead)}
 	}
-	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command)}
+	return framework.ToolPermissions{Permissions: framework.NewExecutionPermissionSet(t.Workdir, t.Command[0], t.Command[1:])}
 }
 
 func (t *RunBuildTool) run(ctx context.Context) (string, string, error) {
@@ -250,4 +317,55 @@ func (t *RunBuildTool) run(ctx context.Context) (string, string, error) {
 		Timeout: t.Timeout,
 	}
 	return t.Runner.Run(ctx, req)
+}
+
+func (t *RunTestsTool) authorizeCommand(ctx context.Context, cmdline []string) error {
+	return authorizeCommand(ctx, t.manager, t.agentID, t.spec, cmdline)
+}
+
+func (t *ExecuteCodeTool) authorizeCommand(ctx context.Context, cmdline []string) error {
+	return authorizeCommand(ctx, t.manager, t.agentID, t.spec, cmdline)
+}
+
+func (t *RunLinterTool) authorizeCommand(ctx context.Context, cmdline []string) error {
+	return authorizeCommand(ctx, t.manager, t.agentID, t.spec, cmdline)
+}
+
+func (t *RunBuildTool) authorizeCommand(ctx context.Context, cmdline []string) error {
+	return authorizeCommand(ctx, t.manager, t.agentID, t.spec, cmdline)
+}
+
+func authorizeCommand(ctx context.Context, manager *framework.PermissionManager, agentID string, spec *framework.AgentRuntimeSpec, cmdline []string) error {
+	if len(cmdline) == 0 {
+		return fmt.Errorf("command empty")
+	}
+	binary := cmdline[0]
+	args := []string{}
+	if len(cmdline) > 1 {
+		args = cmdline[1:]
+	}
+	if manager != nil {
+		if err := manager.CheckExecutable(ctx, agentID, binary, args, nil); err != nil {
+			return err
+		}
+	}
+	if spec != nil {
+		commandString := strings.TrimSpace(binary + " " + strings.Join(args, " "))
+		decision, _ := framework.DecideByPatterns(commandString, spec.Bash.AllowPatterns, spec.Bash.DenyPatterns, spec.Bash.Default)
+		switch decision {
+		case framework.AgentPermissionDeny:
+			return fmt.Errorf("command blocked: denied by bash_permissions")
+		case framework.AgentPermissionAsk:
+			if manager == nil {
+				return fmt.Errorf("command blocked: approval required but permission manager missing")
+			}
+			return manager.RequireApproval(ctx, agentID, framework.PermissionDescriptor{
+				Type:         framework.PermissionTypeHITL,
+				Action:       "bash:exec",
+				Resource:     commandString,
+				RequiresHITL: true,
+			}, "bash permission policy", framework.GrantScopeOneTime, framework.RiskLevelMedium, 0)
+		}
+	}
+	return nil
 }
