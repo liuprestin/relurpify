@@ -44,7 +44,7 @@ spec:
         args: ["install", "*"]
         hitl_required: true # Require approval for installing packages
       - binary: "bash"
-        args: ["-c"]
+        args: ["-c", "*"]
       - binary: "touch"
       - binary: "echo"
     
@@ -132,6 +132,15 @@ spec:
       lsp_query: true
       search_codebase: true
       web_search: false
+
+    # Per-tool Policies (Visibility + Execution)
+    # These are evaluated in addition to the coarse tool matrix above.
+    tool_policies:
+      exec_run_code:
+        visible: true
+        execute: "ask" # "allow", "deny", "ask"
+      exec_run_linter:
+        execute: "allow"
 
     # Bash Execution Constraints
     bash_permissions:
