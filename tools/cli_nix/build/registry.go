@@ -7,6 +7,7 @@ func Tools(basePath string) []framework.Tool {
 	return []framework.Tool{
 		NewMakeTool(basePath),
 		NewCMakeTool(basePath),
+		NewCargoTool(basePath),
 		NewPkgConfigTool(basePath),
 		NewGDBTool(basePath),
 		NewValgrindTool(basePath),
