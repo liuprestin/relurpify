@@ -604,6 +604,48 @@ func (m *PermissionManager) ensureGrant(ctx context.Context, agentID string, des
 	return nil
 }
 
+// RequireApproval requests HITL approval for an arbitrary runtime decision
+// (tool gating, file matrix, bash policy) and caches the resulting grant.
+func (m *PermissionManager) RequireApproval(ctx context.Context, agentID string, desc PermissionDescriptor, justification string, scope GrantScope, risk RiskLevel, duration time.Duration) error {
+	if m == nil {
+		return errors.New("permission manager missing")
+	}
+	desc.RequiresHITL = true
+	key := desc.Action + ":" + desc.Resource
+	m.mu.Lock()
+	if grant, ok := m.grants[key]; ok {
+		if !grant.Expired(m.grantClock()) {
+			m.mu.Unlock()
+			return nil
+		}
+		delete(m.grants, key)
+	}
+	m.mu.Unlock()
+	if m.hitl == nil {
+		return m.deny(ctx, agentID, desc, "hitl approval required")
+	}
+	if scope == "" {
+		scope = GrantScopeOneTime
+	}
+	if risk == "" {
+		risk = RiskLevelMedium
+	}
+	grant, err := m.hitl.RequestPermission(ctx, PermissionRequest{
+		Permission:    desc,
+		Justification: justification,
+		Scope:         scope,
+		Duration:      duration,
+		Risk:          risk,
+	})
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.grants[key] = grant
+	m.mu.Unlock()
+	return nil
+}
+
 // deny records an audit event and returns a structured error describing why an
 // action was blocked.
 func (m *PermissionManager) deny(ctx context.Context, agentID string, desc PermissionDescriptor, reason string) error {
@@ -757,10 +799,25 @@ func matchArgs(patterns, args []string) bool {
 	if len(patterns) == 0 {
 		return true
 	}
-	if len(patterns) != len(args) {
+	if len(patterns) == 1 && patterns[0] == "*" {
+		return true
+	}
+	hasTrailingWildcard := len(patterns) > 0 && patterns[len(patterns)-1] == "*"
+	if !hasTrailingWildcard && len(patterns) != len(args) {
 		return false
 	}
-	for i, pattern := range patterns {
+	if hasTrailingWildcard && len(args) < len(patterns)-1 {
+		return false
+	}
+	limit := len(patterns)
+	if len(args) < limit {
+		limit = len(args)
+	}
+	for i := 0; i < limit; i++ {
+		pattern := patterns[i]
+		if hasTrailingWildcard && i == len(patterns)-1 {
+			break
+		}
 		if pattern == "*" {
 			continue
 		}
