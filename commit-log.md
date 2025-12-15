@@ -1,0 +1,37 @@
+# Commit log for per-file commits
+
+1. agents/coding_agent.go
+2. agents/pattern/react.go
+3. app/cmd/start.go
+4. app/relurpish/main.go
+5. app/relurpish/runtime/runtime.go
+6. app/relurpish/tui/commands.go
+7. app/relurpish/tui/model.go
+8. app/relurpish/tui/update.go
+9. app/relurpish/tui/view.go
+10. framework/ast/index_manager.go
+11. framework/graph.go
+12. framework/hitl.go
+13. framework/manifest.go
+14. framework/permissions.go
+15. framework/telemetry.go
+16. framework/tools.go
+17. relurpish
+18. template_agent.manifest.yaml
+19. tools/cli_nix/build/registry.go
+20. tools/cli_nix/cli_command.go
+21. tools/execution.go
+22. tools/files.go
+23. tools/git.go
+24. tools/lsp.go
+25. tools/lsp_process_client.go
+26. tools/search.go
+27. app/relurpish/tui/hitl.go
+28. app/relurpish/tui/hitl_test.go
+29. framework/glob.go
+30. framework/policy_helpers.go
+31. framework/task_context.go
+32. framework/tool_matrix.go
+33. llm/instrumented_model.go
+34. tools/cli_nix/build/cli_cargo.go
+35. commit-log.md
