@@ -54,7 +54,7 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open log: %w", err)
 	}
-	logger := log.New(io.MultiWriter(os.Stdout, logFile), "relurpish ", log.LstdFlags|log.Lmicroseconds)
+	logger := log.New(logFile, "relurpish ", log.LstdFlags|log.Lmicroseconds)
 
 	memory, err := framework.NewHybridMemory(cfg.MemoryPath)
 	if err != nil {
@@ -90,31 +90,33 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 		logFile.Close()
 		return nil, fmt.Errorf("sandbox registration failed: %w", err)
 	}
-	runner, err := framework.NewSandboxCommandRunner(registration.Manifest, registration.Runtime, cfg.Workspace)
-	if err != nil {
-		logFile.Close()
-		return nil, err
-	}
-	registry, err := BuildToolRegistry(cfg.Workspace, runner)
-	if err != nil {
-		logFile.Close()
-		return nil, err
-	}
-	if registration.Permissions != nil {
-		registry.UsePermissionManager(registration.ID, registration.Permissions)
-	}
 	if registration.Manifest == nil || registration.Manifest.Spec.Agent == nil {
 		logFile.Close()
 		return nil, fmt.Errorf("agent manifest missing spec.agent configuration")
-	}
-	if cfg.AgentName == "" {
-		cfg.AgentName = registration.Manifest.Metadata.Name
 	}
 	agentSpec := registration.Manifest.Spec.Agent
 	if agentSpec.Model.Name == "" {
 		logFile.Close()
 		return nil, fmt.Errorf("agent manifest missing spec.agent.model.name")
 	}
+	runner, err := framework.NewSandboxCommandRunner(registration.Manifest, registration.Runtime, cfg.Workspace)
+	if err != nil {
+		logFile.Close()
+		return nil, err
+	}
+	registry, err := BuildToolRegistry(cfg.Workspace, runner, ToolRegistryOptions{
+		AgentID:            registration.ID,
+		PermissionManager:  registration.Permissions,
+		AgentSpec:          nil,
+	})
+	if err != nil {
+		logFile.Close()
+		return nil, err
+	}
+	if cfg.AgentName == "" {
+		cfg.AgentName = registration.Manifest.Metadata.Name
+	}
+
 	if cfg.OllamaModel == "" {
 		cfg.OllamaModel = agentSpec.Model.Name
 	}
@@ -146,7 +148,13 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	telemetry := framework.MultiplexTelemetry{Sinks: sinks}
 	registry.UseTelemetry(telemetry)
 
-	model := llm.NewClient(cfg.OllamaEndpoint, cfg.OllamaModel)
+	logLLM := false
+	if agentSpec.Logging != nil && agentSpec.Logging.LLM != nil {
+		logLLM = *agentSpec.Logging.LLM
+	}
+	modelClient := llm.NewClient(cfg.OllamaEndpoint, cfg.OllamaModel)
+	modelClient.SetDebugLogging(logLLM)
+	model := llm.NewInstrumentedModel(modelClient, telemetry, logLLM)
 
 	// Create base config derived from manifest + CLI args
 	agentCfg := &framework.Config{
@@ -160,6 +168,12 @@ func New(ctx context.Context, cfg Config) (*Runtime, error) {
 	}
 
 	agent := instantiateAgent(cfg, model, registry, memory, agentDefs, agentCfg)
+
+	// Enforce the effective (post-definition) tool policies before initializing.
+	if agentCfg.AgentSpec != nil {
+		framework.RestrictToolRegistryByMatrix(registry, agentCfg.AgentSpec.Tools)
+		registry.UseAgentSpec(registration.ID, agentCfg.AgentSpec)
+	}
 
 	if err := agent.Initialize(agentCfg); err != nil {
 		logFile.Close()
@@ -196,15 +210,32 @@ func (r *Runtime) Close() error {
 	return nil
 }
 
+// ToolRegistryOptions carries optional manifest/runtime policies into tool construction.
+type ToolRegistryOptions struct {
+	AgentID           string
+	PermissionManager *framework.PermissionManager
+	AgentSpec         *framework.AgentRuntimeSpec
+}
+
 // BuildToolRegistry registers builtin tools scoped to the workspace.
-func BuildToolRegistry(workspace string, runner framework.CommandRunner) (*framework.ToolRegistry, error) {
+func BuildToolRegistry(workspace string, runner framework.CommandRunner, opts ...ToolRegistryOptions) (*framework.ToolRegistry, error) {
 	if workspace == "" {
 		workspace = "."
 	}
 	if runner == nil {
 		return nil, fmt.Errorf("command runner required")
 	}
+	var cfg ToolRegistryOptions
+	if len(opts) > 0 {
+		cfg = opts[0]
+	}
 	registry := framework.NewToolRegistry()
+	if cfg.PermissionManager != nil {
+		registry.UsePermissionManager(cfg.AgentID, cfg.PermissionManager)
+	}
+	if cfg.AgentSpec != nil {
+		registry.UseAgentSpec(cfg.AgentID, cfg.AgentSpec)
+	}
 	register := func(tool framework.Tool) error {
 		if err := registry.Register(tool); err != nil {
 			return err
@@ -240,7 +271,7 @@ func BuildToolRegistry(workspace string, runner framework.CommandRunner) (*frame
 		&tools.RunTestsTool{Command: []string{"go", "test", "./..."}, Workdir: workspace, Timeout: 10 * time.Minute, Runner: runner},
 		&tools.RunLinterTool{Command: []string{"golangci-lint", "run"}, Workdir: workspace, Timeout: 5 * time.Minute, Runner: runner},
 		&tools.RunBuildTool{Command: []string{"go", "build", "./..."}, Workdir: workspace, Timeout: 10 * time.Minute, Runner: runner},
-		&tools.ExecuteCodeTool{Command: []string{"bash", "-lc"}, Workdir: workspace, Timeout: 1 * time.Minute, Runner: runner},
+		&tools.ExecuteCodeTool{Command: []string{"bash", "-c"}, Workdir: workspace, Timeout: 1 * time.Minute, Runner: runner},
 	} {
 		if err := register(tool); err != nil {
 			return nil, err
@@ -263,6 +294,15 @@ func BuildToolRegistry(workspace string, runner framework.CommandRunner) (*frame
 		WorkspacePath:   workspace,
 		ParallelWorkers: 4,
 	})
+	if cfg.PermissionManager != nil {
+		manager.SetPathFilter(func(path string, isDir bool) bool {
+			action := framework.FileSystemRead
+			if isDir {
+				action = framework.FileSystemList
+			}
+			return cfg.PermissionManager.CheckFileAccess(context.Background(), cfg.AgentID, action, path) == nil
+		})
+	}
 	tools.AttachASTSymbolProvider(manager, registry)
 	if err := register(tools.NewASTTool(manager)); err != nil {
 		return nil, err
@@ -349,6 +389,14 @@ func (r *Runtime) RunTask(ctx context.Context, task *framework.Task) (*framework
 		return nil, errors.New("task required")
 	}
 	state := r.Context.Clone()
+	state.Set("task.id", task.ID)
+	state.Set("task.type", string(task.Type))
+	state.Set("task.instruction", task.Instruction)
+	if task.Context != nil {
+		if source, ok := task.Context["source"]; ok {
+			state.Set("task.source", fmt.Sprint(source))
+		}
+	}
 	res, err := r.Agent.Execute(ctx, task, state)
 	if err == nil {
 		r.Context.Merge(state)
@@ -434,6 +482,17 @@ func (r *Runtime) PendingHITL() []*framework.PermissionRequest {
 		return nil
 	}
 	return r.Registration.HITL.PendingRequests()
+}
+
+// SubscribeHITL streams HITL lifecycle events (requested/resolved/expired).
+// The returned cancel function can be called to unsubscribe.
+func (r *Runtime) SubscribeHITL() (<-chan framework.HITLEvent, func()) {
+	if r == nil || r.Registration == nil || r.Registration.HITL == nil {
+		ch := make(chan framework.HITLEvent)
+		close(ch)
+		return ch, func() {}
+	}
+	return r.Registration.HITL.Subscribe(32)
 }
 
 // ApproveHITL approves a pending request with the supplied scope.
