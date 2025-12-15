@@ -10,12 +10,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	runtimesvc "github.com/lexcodex/relurpify/app/relurpish/runtime"
+	"github.com/lexcodex/relurpify/framework"
 )
 
 // Init fulfills the Bubble Tea Model interface.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, m.spinner.Tick)
+	return tea.Batch(textinput.Blink, m.spinner.Tick, listenHITLEvents(m.hitlCh))
 }
 
 // Update applies incoming Bubble Tea messages to mutate the Model state.
@@ -40,6 +40,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCommandMode(msg)
 		case ModeFilePicker:
 			return m.handleFilePickerMode(msg)
+		case ModeHITL:
+			return m.handleHITLMode(msg)
 		}
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -54,6 +56,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleUpdateTask(msg)
 	case hitlMsg:
 		return m.addSystemMessage(msg.content), nil
+	case hitlResolvedMsg:
+		return m.handleHITLResolved(msg)
+	case hitlEventMsg:
+		return m.handleHITLEvent(msg)
 	}
 	return m, nil
 }
@@ -337,6 +343,82 @@ func (m Model) toggleExpandAtCursor() (tea.Model, tea.Cmd) {
 	return m.refreshFeedContent(), nil
 }
 
+func (m Model) handleHITLResolved(msg hitlResolvedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m.addSystemMessage(fmt.Sprintf("HITL %s failed: %v", msg.requestID, msg.err)), listenHITLEvents(m.hitlCh)
+	}
+	if msg.approved {
+		m = m.addSystemMessage(fmt.Sprintf("Approved %s", msg.requestID))
+	} else {
+		m = m.addSystemMessage(fmt.Sprintf("Denied %s", msg.requestID))
+	}
+	m = m.exitHITL()
+	return m, listenHITLEvents(m.hitlCh)
+}
+
+func (m Model) handleHITLMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.hitlRequest == nil {
+		return m.exitHITL(), listenHITLEvents(m.hitlCh)
+	}
+	switch msg.String() {
+	case "y", "Y":
+		return m, approveHITLCmd(m.hitl, m.hitlRequest.ID)
+	case "n", "N", "esc":
+		return m, denyHITLCmd(m.hitl, m.hitlRequest.ID)
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) handleHITLEvent(msg hitlEventMsg) (tea.Model, tea.Cmd) {
+	// Keep listening for the next event.
+	next := listenHITLEvents(m.hitlCh)
+
+	// Sync to current pending list for robustness (handles bursts/missed events).
+	var pending []*framework.PermissionRequest
+	if m.hitl != nil {
+		pending = m.hitl.PendingHITL()
+	}
+
+	switch msg.event.Type {
+	case framework.HITLEventRequested:
+		if len(pending) > 0 && m.mode != ModeHITL {
+			req := pending[0]
+			m = m.enterHITL(req)
+			m = m.addSystemMessage(fmt.Sprintf("Permission requested: %s %s (%s)", req.ID, req.Permission.Action, req.Justification))
+		}
+	case framework.HITLEventResolved, framework.HITLEventExpired:
+		// If current request is gone, exit HITL or advance to next pending.
+		if m.mode == ModeHITL && m.hitlRequest != nil {
+			current := m.hitlRequest.ID
+			found := false
+			for _, req := range pending {
+				if req.ID == current {
+					found = true
+					break
+				}
+			}
+			if !found {
+				m = m.exitHITL()
+				if len(pending) > 0 {
+					m = m.enterHITL(pending[0])
+				}
+			}
+		} else if len(pending) > 0 && m.mode != ModeHITL {
+			m = m.enterHITL(pending[0])
+		}
+		if msg.event.Type == framework.HITLEventExpired && msg.event.Request != nil {
+			reason := msg.event.Error
+			if reason == "" {
+				reason = "expired"
+			}
+			m = m.addSystemMessage(fmt.Sprintf("Permission %s expired: %s", msg.event.Request.ID, reason))
+		}
+	}
+
+	return m, next
+}
+
 // listenToStream adapts Go channels to Bubble Tea commands for streaming.
 func listenToStream(ch <-chan tea.Msg) tea.Cmd {
 	if ch == nil {
@@ -352,7 +434,7 @@ func listenToStream(ch <-chan tea.Msg) tea.Cmd {
 }
 
 // Utility command to surface pending HITL approvals via /hitl.
-func summarizePendingHITL(rt *runtimesvc.Runtime) tea.Cmd {
+func summarizePendingHITL(rt hitlService) tea.Cmd {
 	if rt == nil {
 		return nil
 	}
