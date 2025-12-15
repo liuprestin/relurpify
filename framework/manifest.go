@@ -116,6 +116,7 @@ type AgentRuntimeSpec struct {
 	Prompt            string               `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Model             AgentModelConfig     `yaml:"model" json:"model"`
 	Tools             AgentToolMatrix      `yaml:"tools" json:"tools"`
+	ToolPolicies      map[string]ToolPolicy `yaml:"tool_policies,omitempty" json:"tool_policies,omitempty"`
 	Bash              AgentBashPermissions `yaml:"bash_permissions,omitempty" json:"bash_permissions,omitempty"`
 	Files             AgentFileMatrix      `yaml:"file_permissions,omitempty" json:"file_permissions,omitempty"`
 	Invocation        AgentInvocationSpec  `yaml:"invocation,omitempty" json:"invocation,omitempty"`
@@ -181,6 +182,15 @@ type AgentToolMatrix struct {
 	LSPQuery       bool `yaml:"lsp_query" json:"lsp_query"`
 	SearchCodebase bool `yaml:"search_codebase" json:"search_codebase"`
 	WebSearch      bool `yaml:"web_search" json:"web_search"`
+}
+
+// ToolPolicy configures visibility and execution gating for a single tool.
+// Visibility controls whether the tool is exposed to agents (and therefore
+// callable by name). Execution controls whether calls are allowed, denied, or
+// require HITL approval.
+type ToolPolicy struct {
+	Visible *bool                `yaml:"visible,omitempty" json:"visible,omitempty"`
+	Execute AgentPermissionLevel `yaml:"execute,omitempty" json:"execute,omitempty"` // allow/deny/ask
 }
 
 // AgentBashPermissions constrains shell commands.
@@ -256,6 +266,16 @@ func (a *AgentRuntimeSpec) Validate() error {
 	}
 	if err := a.Tools.Validate(); err != nil {
 		return err
+	}
+	for name, policy := range a.ToolPolicies {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("tool policy contains empty tool name")
+		}
+		switch policy.Execute {
+		case AgentPermissionAllow, AgentPermissionAsk, AgentPermissionDeny, "":
+		default:
+			return fmt.Errorf("tool policy %s execute=%s invalid", name, policy.Execute)
+		}
 	}
 	if err := a.Files.Validate(); err != nil {
 		return err
