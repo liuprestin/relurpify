@@ -56,6 +56,8 @@ type HITLBroker struct {
 	mu       sync.Mutex
 	requests map[string]*PermissionRequest
 	waiters  map[string]chan PermissionDecision
+	subs     map[int]chan HITLEvent
+	subSeq   int
 	clock    func() time.Time
 }
 
@@ -68,7 +70,67 @@ func NewHITLBroker(timeout time.Duration) *HITLBroker {
 		timeout:  timeout,
 		requests: make(map[string]*PermissionRequest),
 		waiters:  make(map[string]chan PermissionDecision),
+		subs:     make(map[int]chan HITLEvent),
 		clock:    time.Now,
+	}
+}
+
+// HITLEventType describes the lifecycle stage of a HITL permission request.
+type HITLEventType string
+
+const (
+	HITLEventRequested HITLEventType = "requested"
+	HITLEventResolved  HITLEventType = "resolved"
+	HITLEventExpired   HITLEventType = "expired"
+)
+
+// HITLEvent is emitted whenever a permission request is created, resolved, or expires.
+type HITLEvent struct {
+	Type     HITLEventType
+	Request  *PermissionRequest
+	Decision *PermissionDecision
+	Error    string
+}
+
+// Subscribe returns a channel that receives HITL lifecycle events.
+// Call the returned cancel function to unsubscribe.
+func (h *HITLBroker) Subscribe(buffer int) (<-chan HITLEvent, func()) {
+	if h == nil {
+		ch := make(chan HITLEvent)
+		close(ch)
+		return ch, func() {}
+	}
+	if buffer <= 0 {
+		buffer = 16
+	}
+	ch := make(chan HITLEvent, buffer)
+	h.mu.Lock()
+	id := h.subSeq
+	h.subSeq++
+	h.subs[id] = ch
+	h.mu.Unlock()
+	cancel := func() {
+		h.mu.Lock()
+		sub, ok := h.subs[id]
+		if ok {
+			delete(h.subs, id)
+		}
+		h.mu.Unlock()
+		if ok {
+			close(sub)
+		}
+	}
+	return ch, cancel
+}
+
+func (h *HITLBroker) broadcast(event HITLEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, ch := range h.subs {
+		select {
+		case ch <- event:
+		default:
+		}
 	}
 }
 
@@ -87,6 +149,7 @@ func (h *HITLBroker) RequestPermission(ctx context.Context, req PermissionReques
 	h.requests[req.ID] = &req
 	h.waiters[req.ID] = waitCh
 	h.mu.Unlock()
+	h.broadcast(HITLEvent{Type: HITLEventRequested, Request: &req})
 
 	select {
 	case decision := <-waitCh:
@@ -98,8 +161,10 @@ func (h *HITLBroker) RequestPermission(ctx context.Context, req PermissionReques
 		}
 		defer deleteFn()
 		if !decision.Approved {
+			h.broadcast(HITLEvent{Type: HITLEventResolved, Request: &req, Decision: &decision})
 			return nil, fmt.Errorf("permission denied: %s", decision.Reason)
 		}
+		h.broadcast(HITLEvent{Type: HITLEventResolved, Request: &req, Decision: &decision})
 		return &PermissionGrant{
 			ID:          decision.RequestID,
 			Permission:  req.Permission,
@@ -111,8 +176,18 @@ func (h *HITLBroker) RequestPermission(ctx context.Context, req PermissionReques
 			Description: req.Justification,
 		}, nil
 	case <-ctx.Done():
+		h.mu.Lock()
+		delete(h.requests, req.ID)
+		delete(h.waiters, req.ID)
+		h.mu.Unlock()
+		h.broadcast(HITLEvent{Type: HITLEventExpired, Request: &req, Error: ctx.Err().Error()})
 		return nil, ctx.Err()
 	case <-time.After(h.timeout):
+		h.mu.Lock()
+		delete(h.requests, req.ID)
+		delete(h.waiters, req.ID)
+		h.mu.Unlock()
+		h.broadcast(HITLEvent{Type: HITLEventExpired, Request: &req, Error: "timed out"})
 		return nil, fmt.Errorf("permission request %s timed out", req.Permission.Action)
 	}
 }
@@ -129,6 +204,7 @@ func (h *HITLBroker) SubmitAsync(req PermissionRequest) (string, error) {
 	}
 	h.requests[req.ID] = &req
 	h.waiters[req.ID] = make(chan PermissionDecision, 1)
+	h.broadcast(HITLEvent{Type: HITLEventRequested, Request: &req})
 	return req.ID, nil
 }
 
@@ -151,6 +227,9 @@ func (h *HITLBroker) Approve(decision PermissionDecision) error {
 		waiter <- decision
 		close(waiter)
 	}
+	reqCopy := *req
+	decisionCopy := decision
+	go h.broadcast(HITLEvent{Type: HITLEventResolved, Request: &reqCopy, Decision: &decisionCopy})
 	return nil
 }
 
@@ -171,6 +250,9 @@ func (h *HITLBroker) Deny(requestID, reason string) error {
 		}
 		close(waiter)
 	}
+	reqCopy := *req
+	decision := PermissionDecision{RequestID: requestID, Approved: false, Reason: reason}
+	go h.broadcast(HITLEvent{Type: HITLEventResolved, Request: &reqCopy, Decision: &decision})
 	return nil
 }
 
